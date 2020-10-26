@@ -35,15 +35,15 @@ valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": dhcp.DHCP_OPT_NETMASK
                                             "MTU Interface": dhcp.DHCP_OPT_MTUSIZE,
                                             "Broadcast Address": dhcp.DHCP_OPT_BROADCASTADDR}
 
-valid_multi_valued_attr: List[str] ={"Router": dhcp.DHCP_OPT_ROUTER, 
-                                     "Time Server": dhcp.DHCP_OPT_TIMESERVER, 
-                                     "Name Server": dhcp. DHCP_OPT_NAMESERVER, 
-                                     "Log Server": dhcp.DHCP_OPT_LOGSERV,
-                                     "Domain Server": dhcp.DHCP_OPT_DNS_SVRS, 
-                                     "Static Route": dhcp.DHCP_OPT_STATICROUTE, 
-                                     "SMTP-Server": dhcp.DHCP_OPT_SMTPSERVER, 
-                                     "POP3-Server": dhcp.DHCP_OPT_POP3SERVER, 
-                                     "IPv6": 91}  # Using unused option type
+valid_multi_valued_attr: Dict[str, int] = {"Router": dhcp.DHCP_OPT_ROUTER, 
+                                           "Time Server": dhcp.DHCP_OPT_TIMESERVER, 
+                                           "Name Server": dhcp. DHCP_OPT_NAMESERVER, 
+                                           "Log Server": dhcp.DHCP_OPT_LOGSERV,
+                                           "Domain Server": dhcp.DHCP_OPT_DNS_SVRS, 
+                                           "Static Route": dhcp.DHCP_OPT_STATICROUTE, 
+                                           "SMTP-Server": dhcp.DHCP_OPT_SMTPSERVER, 
+                                           "POP3-Server": dhcp.DHCP_OPT_POP3SERVER, 
+                                           "IPv6": 91}  # Using unused option type
 
 class database:
     def fetch_host_conf_data(self, ifname: str, mac: str) -> Dict[str,Any]:
