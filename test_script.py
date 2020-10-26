@@ -37,18 +37,18 @@ def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists
         ifname = ifname_list[i]
         attr_list = attr_lists[i]
         for attr in attr_list:
-            if attr[2] == 'string':
+            if isinstance(attr[1], str):
                 sql_insert_query = """ insert into host_configuration_data 
-                           (ifname, mac, attr_name, attr_val, attr_type) """ \
+                           (ifname, mac, attr_name, attr_val) """ \
                            + "values ('" + ifname +  \
                            "', '" + mac + "', '" + attr[0] + \
-                           "', '" + attr[1] + "', '" + attr[2] + "');"
+                           "', '" + attr[1] + "');"
             else:
                 sql_insert_query = """ insert into host_configuration_data 
-                           (ifname, mac, attr_name, attr_val, attr_type) """ \
+                           (ifname, mac, attr_name, attr_val) """ \
                            + "values ('" + ifname +  \
                            "', '" + mac + "', '" + attr[0] + \
-                           "', " + str(attr[1]) + ", '" + attr[2] + "');"
+                           "', " + str(attr[1]) + ");"
             dhcp_db.db_handler.execute(sql_insert_query)
             dhcp_db.connection.commit()
 
@@ -70,28 +70,28 @@ mac_list = []
 for name in ifname_list:
     mac_list.extend([getHwAddr(name)])
 print(mac_list)
-attr_lists = [[("IPv4", "20.0.0.1", "string"),
-              ("Subnet Mask", "255.255.255.0", "string"), 
-              ("Time Offset", 1245, "int"),
-              ("Router", "30.1.1.1", "string"),
-              ("Router", "30.1.1.2", "string"),
-              ("Router", "30.1.1.3", "string"),
-              ("Domain Name", "20.0.0.5", "string"),
-              ("Hostname", "20.0.0.6", "string"),
-              ("Domain Server", '192.168.144.56', "string"),
-              ("Name Server",  '192.168.144.57', "string"),
-              ("NETBIOS Scope", '40.0.0.5', "string")],
-              [("IPv4", "60.0.0.1", "string"),
-              ("Subnet Mask", "255.255.255.0", "string"), 
+attr_lists = [[("IPv4", "20.0.0.1"),
+              ("Subnet Mask", "255.255.255.0"), 
+              ("Time Offset", 1245),
+              ("Router", "30.1.1.1"),
+              ("Router", "30.1.1.2"),
+              ("Router", "30.1.1.3"),
+              ("Domain Name", "20.0.0.5"),
+              ("Hostname", "20.0.0.6"),
+              ("Domain Server", '192.168.144.56'),
+              ("Name Server",  '192.168.144.57'),
+              ("NETBIOS Scope", '40.0.0.5')],
+              [("IPv4", "60.0.0.1"),
+              ("Subnet Mask", "255.255.255.0"), 
               ("Time Offset", 1234, "int"),
-              ("Router", "70.1.1.1", "string"),
-              ("Router", "70.1.1.2", "string"),
-              ("Router", "70.1.1.3", "string"),
-              ("Domain Name", "80.0.0.5", "string"),
-              ("Hostname", "60.0.0.6", "string"),
-              ("Domain Server", '192.168.144.60', "string"),
-              ("Name Server",  '192.168.144.66', "string"),
-              ("NETBIOS Scope", '60.0.0.5', "string")],]
+              ("Router", "70.1.1.1"),
+              ("Router", "70.1.1.2"),
+              ("Router", "70.1.1.3"),
+              ("Domain Name", "80.0.0.5"),
+              ("Hostname", "60.0.0.6"),
+              ("Domain Server", '192.168.144.60'),
+              ("Name Server",  '192.168.144.66'),
+              ("NETBIOS Scope", '60.0.0.5')],]
 
 create_dhcp_database(mac_list, server_if_list, attr_lists)
 
