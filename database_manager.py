@@ -18,7 +18,6 @@ schema = [
            mac text not null,
            attr_name not null,
            attr_val not null,
-           attr_type not null,
            constraint compkey_mac_if_attr unique(ifname, mac, attr_name, attr_val)
            foreign key (ifname, mac) references clients(ifname, mac) on delete cascade,
            foreign key (attr_name) references valid_attributes(name) on delete restrict);"""
