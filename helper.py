@@ -92,6 +92,11 @@ def is_equal_ip(ip1: str, ip2: str) -> bool:
 
 
 def validate_requested_ip(offer_ip: str, requested_ip: str) -> bool:
-    return is_valid_ip(requested_ip) and is_equal_ip(offer_ip, requested_ip)
+    if offer_ip:
+        return is_valid_ip(requested_ip) and is_equal_ip(offer_ip, requested_ip)
+    elif not is_valid_ip(requested_ip):
+        return True
+    else:
+        return False
 
 

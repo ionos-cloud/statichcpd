@@ -8,6 +8,26 @@ import socket
 import fcntl
 import struct
 
+valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": dhcp.DHCP_OPT_NETMASK, 
+                                            "Time Offset": dhcp.DHCP_OPT_TIMEOFFSET, 
+                                            "Domain Name": dhcp.DHCP_OPT_DOMAIN, 
+                                            "IPv4": DHCP_IP_OPCODE, # Using unused option type 
+                                            "Hostname": dhcp.DHCP_OPT_HOSTNAME, 
+                                            "NETBIOS Scope": dhcp.DHCP_OPT_NBTCPSCOPE, 
+                                            "MTU Interface": dhcp.DHCP_OPT_MTUSIZE,
+                                            "Broadcast Address": dhcp.DHCP_OPT_BROADCASTADDR}
+
+valid_multi_valued_attr: Dict[str, int] = {"Router": dhcp.DHCP_OPT_ROUTER, 
+                                           "Time Server": dhcp.DHCP_OPT_TIMESERVER, 
+                                           "Name Server": dhcp. DHCP_OPT_NAMESERVER, 
+                                           "Log Server": dhcp.DHCP_OPT_LOGSERV,
+                                           "Domain Server": dhcp.DHCP_OPT_DNS_SVRS, 
+                                           "Static Route": dhcp.DHCP_OPT_STATICROUTE, 
+                                           "SMTP-Server": dhcp.DHCP_OPT_SMTPSERVER, 
+                                           "POP3-Server": dhcp.DHCP_OPT_POP3SERVER, 
+                                           "IPv6": DHCP_IPV6_OPCODE}  # Using unused option type
+
+
 def getHwAddr(ifname: str) -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     info = fcntl.ioctl(sock.fileno(), 0x8927,  struct.pack('256s', bytes(ifname[:15], 'utf-8')))
@@ -20,16 +40,18 @@ def init_client_table(mac_list: List[str], ifname_list: List[str]) -> None:
     for i in range(len(mac_list)):
         mac  = mac_list[i]
         ifname = ifname_list[i]
-        sql_insert_query = " insert into clients (ifname, mac) " + "values ('" + ifname + "', '" + mac + "');"
-        dhcp_db.db_handler.execute(sql_insert_query)
+        dhcp_db.db_handler.execute(" insert into clients (ifname, mac) values (?,?)", (ifname, mac))
         dhcp_db.connection.commit()
 
 
 def init_valid_attributes_table():
     for attr in valid_single_valued_attr:
-        sql_insert_query = " insert into valid_attributes (name) values ('" + attr + "');" 
+        dhcp_db.db_handler.execute(" insert into valid_attributes (name, opcode, max_count) values (?, ?, 1)", 
+                                     (attr, valid_single_valued_attr[attr])) 
     for attr in valid_multi_valued_attr:
-        sql_insert_query = " insert into valid_attributes (name) values ('" + attr + "');" 
+        dhcp_db.db_handler.execute(" insert into valid_attributes (name, opcode, max_count) values (?, ?, 100)", 
+                                     (attr, valid_multi_valued_attr[attr])) 
+    dhcp_db.connection.commit()
 
 def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:
     for i in range(len(mac_list)):
@@ -37,20 +59,10 @@ def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists
         ifname = ifname_list[i]
         attr_list = attr_lists[i]
         for attr in attr_list:
-            if isinstance(attr[1], str):
-                sql_insert_query = """ insert into host_configuration_data 
-                           (ifname, mac, attr_name, attr_val) """ \
-                           + "values ('" + ifname +  \
-                           "', '" + mac + "', '" + attr[0] + \
-                           "', '" + attr[1] + "');"
-            else:
-                sql_insert_query = """ insert into host_configuration_data 
-                           (ifname, mac, attr_name, attr_val) """ \
-                           + "values ('" + ifname +  \
-                           "', '" + mac + "', '" + attr[0] + \
-                           "', " + str(attr[1]) + ");"
-            dhcp_db.db_handler.execute(sql_insert_query)
-            dhcp_db.connection.commit()
+            dhcp_db.db_handler.execute(""" insert into host_configuration_data
+                                       (ifname, mac, attr_name, attr_val) values
+                                       (?, ?, ?, ?)""", (ifname, mac, attr[0], attr[1]))
+        dhcp_db.connection.commit()
 
 
 def create_dhcp_database(mac: List[str], ifname: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:

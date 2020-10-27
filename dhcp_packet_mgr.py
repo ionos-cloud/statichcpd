@@ -9,7 +9,7 @@ import socket
 import dhcppython
 import netifaces as ni
 from helper import *
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Optional
 
 
 dhcp_option_type = dhcppython.options.OptionDirectory
@@ -29,7 +29,7 @@ def fetch_dhcp_type(dhcp_obj: dhcp) -> int:
 def fetch_dhcp_req_ip(dhcp_obj: dhcp) -> str:
     data = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_REQ_IP)
     return str( ipaddress.ip_address(data))
-    
+   
 # If giaddr != 0, send to giaddr
 # If ciaddr != 0, send to ciaddr
 # If ciaddr = 0 and giaddr = 0 and broadcast = 1, send broadcast
@@ -65,20 +65,17 @@ def append_msg_type_and_server_id(opt_list: dhcp_option_type, option: str, serve
 # Input:  List(opt1, opt2,..), mac value and ifname value
 # Return: dhcp options list with corresponding values from the database
 
-# Should all available data be supplied irrespective of request list?
 def construct_dhcp_opt_list(request_list_opt: List[int], mac: str, 
                             ifname: str, host_conf_data: Dict[str, str]) -> dhcp_option_type:
     opt_list = dhcppython.options.OptionList([])
     if request_list_opt ==  -1:
         print("No parameter request list")
         return opt_list
-
-    for entry in host_conf_data:
-        opcode = valid_single_valued_attr.get(entry) or valid_multi_valued_attr.get(entry)
+    for opcode in host_conf_data:
         if opcode and opcode in request_list_opt:
-            opt_list.append(dhcppython.options.options.short_value_to_object(opcode, host_conf_data[entry]))
+            opt_list.append(dhcppython.options.options.short_value_to_object(opcode, host_conf_data[opcode]))
     return opt_list
-            
+           
 def construct_dhcp_packet(dhcp_obj: dhcp, client_ip: str, opt_list: dhcp_options_list_type) -> dhcppacket_type:
     dhcp_packet = dhcppython.packet.DHCPPacket(
             op='BOOTREPLY', htype='ETHERNET', 
@@ -129,13 +126,10 @@ def process_dhcp_discover(dhcp_obj: dhcp, ifname: str) -> None:
     if host_conf_data == {}:
         print("No configuration data found for the host. Skipping ..")
         return
-        
-    if "IPv4" in host_conf_data:
-        offer_ip = host_conf_data["IPv4"]
+       
+    offer_ip = dhcp_db.fetch_ip(ifname, client_mac) 
+    if offer_ip:
         print("Constructing DHCP OFFER with IP: ", offer_ip)        
-    else:
-        offer_ip = None
-        print("No IP address entry found")
 
     dhcp_offer = construct_dhcp_offer(dhcp_obj, ifname, offer_ip, request_list_opt, host_conf_data)
     if dhcp_offer:
@@ -155,11 +149,9 @@ def process_dhcp_request(dhcp_obj: dhcp, ifname: str) -> None:
         print("No configuration data found for the host. Skipping ..")
         return
         
-    if "IPv4" in host_conf_data:
-        offer_ip = host_conf_data["IPv4"]
-    else:
-        offer_ip = None
-        print("No IP address entry found")
+    offer_ip = dhcp_db.fetch_ip(ifname, client_mac) 
+    if offer_ip:
+        print("Constructing DHCP OFFER with IP: ", offer_ip)        
 
     is_valid_request = validate_requested_ip(offer_ip, requested_ip)
 

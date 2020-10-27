@@ -2,7 +2,7 @@
 
 import sqlite3
 from dpkt import dhcp
-from typing import Tuple, List, Any, Dict
+from typing import Tuple, List, Any, Dict, Optional
 import os
 
 schema = [
@@ -12,7 +12,10 @@ schema = [
            constraint compkey_mac_if unique(ifname, mac));""",
         """create table if not exists valid_attributes(
            name text not null,
-           constraint unique_name unique(name));""",
+           opcode int not null,
+           max_count int not null,
+           constraint unique_name unique(name),
+           constraint unique_opcode unique(opcode));""",
         """create table if not exists host_configuration_data (
            ifname text not null,
            mac text not null,
@@ -23,47 +26,39 @@ schema = [
            foreign key (attr_name) references valid_attributes(name) on delete restrict);"""
         ]
 
-# Do we need a separate table for single valued attr to ensure no repetition?
-
-valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": dhcp.DHCP_OPT_NETMASK, 
-                                            "Time Offset": dhcp.DHCP_OPT_TIMEOFFSET, 
-                                            "Domain Name": dhcp.DHCP_OPT_DOMAIN, 
-                                            "IPv4": 90, # Using unused option type 
-                                            "Hostname": dhcp.DHCP_OPT_HOSTNAME, 
-                                            "NETBIOS Scope": dhcp.DHCP_OPT_NBTCPSCOPE, 
-                                            "MTU Interface": dhcp.DHCP_OPT_MTUSIZE,
-                                            "Broadcast Address": dhcp.DHCP_OPT_BROADCASTADDR}
-
-valid_multi_valued_attr: Dict[str, int] = {"Router": dhcp.DHCP_OPT_ROUTER, 
-                                           "Time Server": dhcp.DHCP_OPT_TIMESERVER, 
-                                           "Name Server": dhcp. DHCP_OPT_NAMESERVER, 
-                                           "Log Server": dhcp.DHCP_OPT_LOGSERV,
-                                           "Domain Server": dhcp.DHCP_OPT_DNS_SVRS, 
-                                           "Static Route": dhcp.DHCP_OPT_STATICROUTE, 
-                                           "SMTP-Server": dhcp.DHCP_OPT_SMTPSERVER, 
-                                           "POP3-Server": dhcp.DHCP_OPT_POP3SERVER, 
-                                           "IPv6": 91}  # Using unused option type
+DHCP_IP_OPCODE = 90  ## Either differentiate the address values with opcodes or store them in separate tables
+DHCP_IPV6_OPCODE = 91
 
 class database:
+    def fetch_ip(self, ifname: str, mac: str) -> Optional[str]:
+        self.db_handler.execute( """select attr_val from host_configuration_data
+                                 join valid_attributes on
+                                 host_configuration_data.attr_name = valid_attributes.name
+                                 where ifname=? and mac=? and valid_attributes.opcode=?""", 
+                                 (ifname, mac, DHCP_IP_OPCODE) )
+        result = dhcp_db.db_handler.fetchone()
+        if result == []:
+            return None
+        return result[0]
+
+
     def fetch_host_conf_data(self, ifname: str, mac: str) -> Dict[str,Any]:
         print("Fetching Host conf for ", ifname, " ", mac)
-        sql_query = """ select attr_name, attr_val from host_configuration_data
-                        where ifname='""" + ifname + "' and mac='" + mac + "';"
-        print(sql_query)
-        self.db_handler.execute(sql_query)
-        sqldata = self.db_handler.fetchall()
         result = {}
-        for data in sqldata:
-            if data[0] in valid_single_valued_attr:   ## Assumed that application handles insertion of attr values
-                result[data[0]] = data[1]             ## appropriately
-            elif data[0] in valid_multi_valued_attr:
-                existing_data = result.get(data[0])
-                if existing_data != None:
-                    result[data[0]].append(data[1])
-                else:
-                    result[data[0]] = [data[1]]
+        # Should the presence of table be confirmed? If table is not created, this will return error
+        for (opcode, max_count, value) in self.db_handler.execute(
+                         """ select valid_attributes.opcode, valid_attributes.max_count, host_configuration_data.attr_val 
+                             from host_configuration_data
+                             join valid_attributes on 
+                             host_configuration_data.attr_name = valid_attributes.name
+                             where ifname=? and mac=?""", (ifname, mac)
+                         ):
+            if max_count == 1:             ## Assumed that application handles insertion of attr values
+                result[opcode] = value     ## appropriately
             else:
-                print("Unknown option type ", data[0])
+                if opcode not in result:
+                    result[opcode] = []
+                result[opcode].append(value)
         return result
 
     def __init__(self):

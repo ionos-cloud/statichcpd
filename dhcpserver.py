@@ -6,7 +6,6 @@ from pyroute2.netlink import rtnl
 from pyroute2.netlink.rtnl.ifinfmsg import ifinfmsg
 import socket
 
-from database_manager import database, dhcp_db
 from helper import *
 from dhcp_packet_mgr import *
 
