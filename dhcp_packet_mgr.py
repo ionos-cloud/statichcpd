@@ -6,15 +6,12 @@ from dpkt import dhcp
 import struct
 import ipaddress
 import socket
-import dhcppython
 import netifaces as ni
 from helper import *
 from typing import Any, List, Tuple, Optional
 
 
-dhcp_option_type = dhcppython.options.OptionDirectory
-dhcppacket_type = dhcppython.packet.DHCPPacket
-dhcp_options_list_type = dhcppython.options.OptionList
+dhcppacket_type = dhcp.DHCP
 
 def fetch_dhcp_opt(dhcp_obj: dhcp, opt: int) -> Any:
     for t, data in dhcp_obj.opts:
@@ -37,7 +34,7 @@ def fetch_dhcp_req_ip(dhcp_obj: dhcp) -> str:
 
 def send_packet(dhcp_packet: dhcppacket_type, ifname: str, dhcp_obj: dhcp) -> None:
     sock = ifname_to_socket(ifname)
-    data = dhcp_packet.asbytes
+    data = bytes(dhcp_packet)
     if is_valid_ip(str(ipaddress.ip_address(dhcp_obj.giaddr))):
         addr = str(ipaddress.ip_address(dhcp_obj.giaddr))
     elif is_valid_ip(str(ipaddress.ip_address(dhcp_obj.ciaddr))):
@@ -54,39 +51,45 @@ def send_packet(dhcp_packet: dhcppacket_type, ifname: str, dhcp_obj: dhcp) -> No
     print('Sending to addr ', addr)
     sock.sendto(data, (addr, 68))
 
-def append_msg_type_and_server_id(opt_list: dhcp_option_type, option: str, server_id: str) -> dhcp_option_type:
-    opt_list.extend([dhcppython.options.options.short_value_to_object(dhcp.DHCP_OPT_MSGTYPE, option),
-                     dhcppython.options.options.short_value_to_object(dhcp.DHCP_OPT_SERVER_ID, server_id),
-                     dhcppython.options.options.short_value_to_object(255, '')])
-    return opt_list
+def append_msg_type_and_server_id(opt_tuple: Tuple, option: str, server_id: str) -> Tuple:
+    opt_list = list(opt_tuple)
+    print('Server ID: ' , server_id)
     
+    opt_list.extend([(dhcp.DHCP_OPT_MSGTYPE, bytes([option])),
+                     (dhcp.DHCP_OPT_SERVER_ID, server_id),
+                     (255, b'')])
+   
+    return tuple(opt_list)
 
 # Purpose : Constructs the dhcp options list with corresponding values as requested by client 
 # Input:  List(opt1, opt2,..), mac value and ifname value
 # Return: dhcp options list with corresponding values from the database
 
 def construct_dhcp_opt_list(request_list_opt: List[int], mac: str, 
-                            ifname: str, host_conf_data: Dict[str, str]) -> dhcp_option_type:
-    opt_list = dhcppython.options.OptionList([])
+                            ifname: str, host_conf_data: Dict[str, str]) -> Tuple:
+    opt_list = []
     if request_list_opt ==  -1:
         print("No parameter request list")
-        return opt_list
+        return tuple(opt_list)
     for opcode in host_conf_data:
         if opcode and opcode in request_list_opt:
-            opt_list.append(dhcppython.options.options.short_value_to_object(opcode, host_conf_data[opcode]))
-    return opt_list
-           
-def construct_dhcp_packet(dhcp_obj: dhcp, client_ip: str, opt_list: dhcp_options_list_type) -> dhcppacket_type:
-    dhcp_packet = dhcppython.packet.DHCPPacket(
-            op='BOOTREPLY', htype='ETHERNET', 
-            hlen=6, hops=0, xid=dhcp_obj.xid, 
+            encoded_option_entry = encode_option(host_conf_data[opcode])
+            opt_list.append((opcode, encoded_option_entry))
+    return tuple(opt_list)
+          
+def construct_dhcp_packet(dhcp_obj: dhcp, client_ip: str, opt_list: Tuple) -> dhcppacket_type:
+     
+    dhcp_packet = dhcp.DHCP(
+            op=dhcp.DHCP_OP_REPLY, #htype='ETHERNET', 
+            hlen=bytes([6]), hops=0, xid=dhcp_obj.xid, 
             secs=0, flags=dhcp_obj.flags, 
-            ciaddr=ipaddress.IPv4Address(dhcp_obj.ciaddr), 
-            yiaddr=ipaddress.IPv4Address(client_ip), 
-            siaddr=ipaddress.IPv4Address(dhcp_obj.siaddr),  # What should be filled?
-            giaddr=ipaddress.IPv4Address(dhcp_obj.giaddr),  # What should be filled? 
-            chaddr=mac_addr(dhcp_obj.chaddr), sname=b'', 
-            file=b'', options=opt_list)
+            ciaddr=dhcp_obj.ciaddr, 
+            yiaddr=iptoint(client_ip), 
+            siaddr=dhcp_obj.siaddr,  # What should be filled?
+            giaddr=dhcp_obj.giaddr,  # What should be filled? 
+            chaddr=dhcp_obj.chaddr, sname=b'', 
+            file=b'', opts=opt_list)
+    dhcp_packet.pack_opts()
     return dhcp_packet
     
 def construct_dhcp_offer(dhcp_obj: dhcp, ifname: str, offer_ip: str, 
@@ -96,7 +99,7 @@ def construct_dhcp_offer(dhcp_obj: dhcp, ifname: str, offer_ip: str,
     opt_list = construct_dhcp_opt_list(request_list_opt, mac_addr(dhcp_obj.chaddr), ifname, host_conf_data)
     if offer_ip == None and opt_list == []: # If no other parameters were requested by client, should offer be sent?
         return None
-    opt_list = append_msg_type_and_server_id(opt_list, "DHCPOFFER", server_id)
+    opt_list = append_msg_type_and_server_id(opt_list, dhcp.DHCPOFFER, server_id)
     return construct_dhcp_packet(dhcp_obj, offer_ip, opt_list)
 
 def construct_dhcp_nak(dhcp_obj: dhcp, ifname: str, requested_ip: str, 
@@ -104,7 +107,7 @@ def construct_dhcp_nak(dhcp_obj: dhcp, ifname: str, requested_ip: str,
     server_id = socket.inet_aton(ni.ifaddresses(ifname)[ni.AF_INET][0]['addr'])
     print("Server IP for NAK: ", server_id)
     opt_list = construct_dhcp_opt_list(request_list_opt, mac_addr(dhcp_obj.chaddr), ifname, host_conf_data)
-    opt_list = append_msg_type_and_server_id(opt_list, "DHCPNAK", server_id)
+    opt_list = append_msg_type_and_server_id(opt_list, dhcp.DHCPNAK, server_id)
     return construct_dhcp_packet(dhcp_obj, requested_ip, opt_list)
 
 def construct_dhcp_ack(dhcp_obj: dhcp, ifname: str, requested_ip: str, 
@@ -112,7 +115,7 @@ def construct_dhcp_ack(dhcp_obj: dhcp, ifname: str, requested_ip: str,
     server_id = socket.inet_aton(ni.ifaddresses(ifname)[ni.AF_INET][0]['addr'])
     print("Server IP for ACK: ", server_id)
     opt_list = construct_dhcp_opt_list(request_list_opt, mac_addr(dhcp_obj.chaddr), ifname, host_conf_data)
-    opt_list = append_msg_type_and_server_id(opt_list, "DHCPACK", server_id)
+    opt_list = append_msg_type_and_server_id(opt_list, dhcp.DHCPACK, server_id)
     return construct_dhcp_packet(dhcp_obj, requested_ip, opt_list)
 
 # In case of DHCP Discover

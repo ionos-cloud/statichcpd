@@ -5,7 +5,9 @@ from select import poll
 from dpkt.compat import compat_ord
 import ipaddress
 from dpkt import dhcp
-from typing import Dict, List
+from typing import Dict, List, Any, Tuple
+from ipaddress import ip_address, IPv4Address
+import struct
 
 ifname_to_sock: Dict = {}
 fd_to_ifname: Dict = {}
@@ -99,4 +101,39 @@ def validate_requested_ip(offer_ip: str, requested_ip: str) -> bool:
     else:
         return False
 
+def is_ipaddr(s: str) -> bool:
+    try: 
+        if type(ip_address(s)) is IPv4Address:
+             return True
+    except ValueError: 
+        return False
+
+def iptoint(ip: str) -> int:
+    return struct.unpack("!L", socket.inet_aton(ip))[0]
+
+def iptobytes(ip: str) -> bytes:
+    return socket.inet_aton(ip)
+
+def str_to_bytes(s: str) -> bytes:
+    return bytes(s, 'utf-8')
+
+def int_to_32bits(num: int) -> bytes:
+    return num.to_bytes(4, 'big')
+
+def iplist_to_bytes(val_list: List) -> bytes:
+    new_str = b''
+    for ele in val_list:
+        new_str += iptobytes(ele) 
+    return new_str
+
+def encode_option(val: Any) -> bytes:
+    if isinstance(val, str):
+        if is_ipaddr(val):
+            return iptobytes(val)
+        else:
+            return str_to_bytes(val)
+    elif type(val) == list:
+        return iplist_to_bytes(val)
+    else:
+        return int_to_32bits(val)
 
