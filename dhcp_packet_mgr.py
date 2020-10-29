@@ -71,8 +71,8 @@ def construct_dhcp_opt_list(request_list_opt: List[int], mac: str,
     if request_list_opt ==  -1:
         print("No parameter request list")
         return tuple(opt_list)
-    for opcode in host_conf_data:
-        if opcode and opcode in request_list_opt:
+    for opcode in request_list_opt:
+        if opcode in host_conf_data:
             opt_list.append((opcode, host_conf_data[opcode]))
     return tuple(opt_list)
           
