@@ -73,8 +73,7 @@ def construct_dhcp_opt_list(request_list_opt: List[int], mac: str,
         return tuple(opt_list)
     for opcode in host_conf_data:
         if opcode and opcode in request_list_opt:
-            encoded_option_entry = encode_option(host_conf_data[opcode])
-            opt_list.append((opcode, encoded_option_entry))
+            opt_list.append((opcode, host_conf_data[opcode]))
     return tuple(opt_list)
           
 def construct_dhcp_packet(dhcp_obj: dhcp, client_ip: str, opt_list: Tuple) -> dhcppacket_type:
@@ -84,7 +83,7 @@ def construct_dhcp_packet(dhcp_obj: dhcp, client_ip: str, opt_list: Tuple) -> dh
             hlen=bytes([6]), hops=0, xid=dhcp_obj.xid, 
             secs=0, flags=dhcp_obj.flags, 
             ciaddr=dhcp_obj.ciaddr, 
-            yiaddr=iptoint(client_ip), 
+            yiaddr=ip_to_int(client_ip), 
             siaddr=dhcp_obj.siaddr,  # What should be filled?
             giaddr=dhcp_obj.giaddr,  # What should be filled? 
             chaddr=dhcp_obj.chaddr, sname=b'', 

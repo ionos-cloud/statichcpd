@@ -108,10 +108,10 @@ def is_ipaddr(s: str) -> bool:
     except ValueError: 
         return False
 
-def iptoint(ip: str) -> int:
+def ip_to_int(ip: str) -> int:
     return struct.unpack("!L", socket.inet_aton(ip))[0]
 
-def iptobytes(ip: str) -> bytes:
+def ip_to_bytes(ip: str) -> bytes:
     return socket.inet_aton(ip)
 
 def str_to_bytes(s: str) -> bytes:
@@ -123,13 +123,13 @@ def int_to_32bits(num: int) -> bytes:
 def iplist_to_bytes(val_list: List) -> bytes:
     new_str = b''
     for ele in val_list:
-        new_str += iptobytes(ele) 
+        new_str += ip_to_bytes(ele) 
     return new_str
 
 def encode_option(val: Any) -> bytes:
     if isinstance(val, str):
         if is_ipaddr(val):
-            return iptobytes(val)
+            return ip_to_bytes(val)
         else:
             return str_to_bytes(val)
     elif type(val) == list:

@@ -4,6 +4,7 @@ import sqlite3
 from dpkt import dhcp
 from typing import Tuple, List, Any, Dict, Optional
 import os
+from helper import encode_option
 
 schema = [
         """create table if not exists clients (
@@ -53,12 +54,13 @@ class database:
                              host_configuration_data.attr_name = valid_attributes.name
                              where ifname=? and mac=?""", (ifname, mac)
                          ):
-            if max_count == 1:             ## Assumed that application handles insertion of attr values
-                result[opcode] = value     ## appropriately
+            if max_count == 1:                             ## Assumed that application handles insertion of attr values
+                result[opcode] = encode_option(value)     ## appropriately
             else:
                 if opcode not in result:
-                    result[opcode] = []
-                result[opcode].append(value)
+                    result[opcode] = b''
+                result[opcode] += encode_option(value)
+
         return result
 
     def __init__(self):
