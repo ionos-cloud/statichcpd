@@ -4,12 +4,12 @@ from database_manager import *
 import dpkt
 from dpkt import dhcp
 import struct
-import ipaddress
+from ipaddress import IPv4Address
 import socket
 import netifaces as ni
 from helper import *
 from typing import Any, List, Tuple, Optional
-
+from datatypes import *
 
 dhcppacket_type = dhcp.DHCP
 
@@ -25,7 +25,7 @@ def fetch_dhcp_type(dhcp_obj: dhcp) -> int:
 
 def fetch_dhcp_req_ip(dhcp_obj: dhcp) -> str:
     data = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_REQ_IP)
-    return str( ipaddress.ip_address(data))
+    return IPv4Address(data)
    
 # If giaddr != 0, send to giaddr
 # If ciaddr != 0, send to ciaddr
@@ -35,14 +35,14 @@ def fetch_dhcp_req_ip(dhcp_obj: dhcp) -> str:
 def send_packet(dhcp_packet: dhcppacket_type, ifname: str, dhcp_obj: dhcp) -> None:
     sock = ifname_to_socket(ifname)
     data = bytes(dhcp_packet)
-    if is_valid_ip(str(ipaddress.ip_address(dhcp_obj.giaddr))):
-        addr = str(ipaddress.ip_address(dhcp_obj.giaddr))
-    elif is_valid_ip(str(ipaddress.ip_address(dhcp_obj.ciaddr))):
-        addr = str(ipaddress.ip_address(dhcp_obj.ciaddr))
+    if not IPv4Address(dhcp_obj.giaddr).is_unspecified:
+        addr = IPv4Address(dhcp_obj.giaddr)
+    elif not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
+        addr = IPv4Address(dhcp_obj.ciaddr)
     else:
-        yiaddr = str(ipaddress.ip_address(dhcp_obj.yiaddr))
+        yiaddr = IPv4Address(dhcp_obj.yiaddr)
         is_broadcast = dhcp_obj.flags & (1 << 0) 
-        if is_broadcast or not(is_valid_ip(yiaddr)):
+        if is_broadcast or yiaddr.is_unspecified:
             print("Broadcasting packet...")
             addr = '255.255.255.255'
         else:
@@ -72,8 +72,27 @@ def construct_dhcp_opt_list(request_list_opt: List[int], mac: str,
         print("No parameter request list")
         return tuple(opt_list)
     for opcode in request_list_opt:
-        if opcode in host_conf_data:
-            opt_list.append((opcode, host_conf_data[opcode]))
+        if opcode in host_conf_data:       # For every option value, do the appropriate encoding
+            data = host_conf_data[opcode]
+            encoded_data = None
+            if isinstance(data, IPv4Address):
+                encoded_data = data.packed
+            elif isinstance(data, str):
+                encoded_data = data.encode('utf-8')
+            elif isinstance(data, Int16):
+                encoded_data = (data.value).to_bytes(2, 'big')
+            elif isinstance(data, Int32):
+                encoded_data = (data.value).to_bytes(4, 'big')
+            elif isinstance(data, list) and len(data) > 0:
+                if isinstance(data[0], IPv4Address):
+                    encoded_data = b''.join([elem.packed for elem in data]) 
+                elif isinstance(data[0], Staticrt):
+                    print("Encode staticrt!")
+                else:
+                    print("Unknown elements in list!")
+            else:
+                print("Value of unexpected type received for ", opcode)
+            opt_list.append((opcode, encoded_data))
     return tuple(opt_list)
           
 def construct_dhcp_packet(dhcp_obj: dhcp, client_ip: str, opt_list: Tuple) -> dhcppacket_type:
@@ -83,12 +102,13 @@ def construct_dhcp_packet(dhcp_obj: dhcp, client_ip: str, opt_list: Tuple) -> dh
             hlen=bytes([6]), hops=0, xid=dhcp_obj.xid, 
             secs=0, flags=dhcp_obj.flags, 
             ciaddr=dhcp_obj.ciaddr, 
-            yiaddr=ip_to_int(client_ip), 
+            yiaddr=int(client_ip), 
             siaddr=dhcp_obj.siaddr,  # What should be filled?
             giaddr=dhcp_obj.giaddr,  # What should be filled? 
             chaddr=dhcp_obj.chaddr, sname=b'', 
             file=b'', opts=opt_list)
-    dhcp_packet.pack_opts()
+    if len(dhcp_packet.opts) > 0:
+        dhcp_packet.pack_opts()
     return dhcp_packet
     
 def construct_dhcp_offer(dhcp_obj: dhcp, ifname: str, offer_ip: str, 
@@ -123,13 +143,13 @@ def construct_dhcp_ack(dhcp_obj: dhcp, ifname: str, requested_ip: str,
 def process_dhcp_discover(dhcp_obj: dhcp, ifname: str) -> None:
     request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
     client_mac =  mac_addr(dhcp_obj.chaddr)
-    host_conf_data = dhcp_db.fetch_host_conf_data(ifname, client_mac)
+    host_conf_data = fetch_host_conf_data(ifname, client_mac)
 
     if host_conf_data == {}:
         print("No configuration data found for the host. Skipping ..")
         return
        
-    offer_ip = dhcp_db.fetch_ip(ifname, client_mac) 
+    offer_ip = fetch_ip_from_database(ifname, client_mac) 
     if offer_ip:
         print("Constructing DHCP OFFER with IP: ", offer_ip)        
 
@@ -145,17 +165,24 @@ def process_dhcp_request(dhcp_obj: dhcp, ifname: str) -> None:
     #Match XID with pending requests??
     client_mac =  mac_addr(dhcp_obj.chaddr)
     requested_ip = fetch_dhcp_req_ip(dhcp_obj)
-    host_conf_data = dhcp_db.fetch_host_conf_data(ifname, client_mac)
+    host_conf_data = fetch_host_conf_data(ifname, client_mac)
     
     if host_conf_data == {}:
         print("No configuration data found for the host. Skipping ..")
         return
         
-    offer_ip = dhcp_db.fetch_ip(ifname, client_mac) 
-    if offer_ip:
-        print("Constructing DHCP OFFER with IP: ", offer_ip)        
+    offer_ip = fetch_ip_from_database(ifname, client_mac)
 
-    is_valid_request = validate_requested_ip(offer_ip, requested_ip)
+    # Validate the requested IP
+    if offer_ip:
+        print("Constructing DHCP OFFER with IP: ", offer_ip)
+        is_valid_request = (not requested_ip.is_unspecified and 
+                            not offer_ip.is_unspecified and 
+                            offer_ip == requested_ip)
+    else:
+        # If there is no offer IP and if the requested IP field is also empty, 
+        # should the ACK be sent back with remaining data?
+        is_valid_request = requested_ip.is_unspecified
 
     if is_valid_request:
         print("Constructing DHCP Accept with IP: ", requested_ip)

@@ -8,24 +8,24 @@ import socket
 import fcntl
 import struct
 
-valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": dhcp.DHCP_OPT_NETMASK, 
-                                            "Time Offset": dhcp.DHCP_OPT_TIMEOFFSET, 
-                                            "Domain Name": dhcp.DHCP_OPT_DOMAIN, 
-                                            "IPv4": DHCP_IP_OPCODE, # Using unused option type 
-                                            "Hostname": dhcp.DHCP_OPT_HOSTNAME, 
-                                            "NETBIOS Scope": dhcp.DHCP_OPT_NBTCPSCOPE, 
-                                            "MTU Interface": dhcp.DHCP_OPT_MTUSIZE,
-                                            "Broadcast Address": dhcp.DHCP_OPT_BROADCASTADDR}
+valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": (dhcp.DHCP_OPT_NETMASK, dtype.IPV4.value), 
+                                            "Time Offset": (dhcp.DHCP_OPT_TIMEOFFSET, dtype.INT32.value), 
+                                            "Domain Name": (dhcp.DHCP_OPT_DOMAIN, dtype.STRING.value), 
+                                            "IPv4": (DHCP_IP_OPCODE, dtype.IPV4.value), # Using unused option type 
+                                            "Hostname": (dhcp.DHCP_OPT_HOSTNAME, dtype.STRING.value), 
+                                            "NETBIOS Scope": (dhcp.DHCP_OPT_NBTCPSCOPE, dtype.STRING.value), 
+                                            "MTU Interface": (dhcp.DHCP_OPT_MTUSIZE, dtype.INT16.value),
+                                            "Broadcast Address": (dhcp.DHCP_OPT_BROADCASTADDR, dtype.IPV4.value)}
 
-valid_multi_valued_attr: Dict[str, int] = {"Router": dhcp.DHCP_OPT_ROUTER, 
-                                           "Time Server": dhcp.DHCP_OPT_TIMESERVER, 
-                                           "Name Server": dhcp. DHCP_OPT_NAMESERVER, 
-                                           "Log Server": dhcp.DHCP_OPT_LOGSERV,
-                                           "Domain Server": dhcp.DHCP_OPT_DNS_SVRS, 
-                                           "Static Route": dhcp.DHCP_OPT_STATICROUTE, 
-                                           "SMTP-Server": dhcp.DHCP_OPT_SMTPSERVER, 
-                                           "POP3-Server": dhcp.DHCP_OPT_POP3SERVER, 
-                                           "IPv6": DHCP_IPV6_OPCODE}  # Using unused option type
+valid_multi_valued_attr: Dict[str, int] = {"Router": (dhcp.DHCP_OPT_ROUTER, dtype.IPV4.value),
+                                           "Time Server": (dhcp.DHCP_OPT_TIMESERVER, dtype.IPV4.value),
+                                           "Name Server": (dhcp. DHCP_OPT_NAMESERVER, dtype.IPV4.value),
+                                           "Log Server": (dhcp.DHCP_OPT_LOGSERV, dtype.IPV4.value),
+                                           "Domain Server": (dhcp.DHCP_OPT_DNS_SVRS, dtype.IPV4.value),
+                                           "Static Route": (dhcp.DHCP_OPT_STATICROUTE, dtype.STATICRT.value),
+                                           "SMTP-Server": (dhcp.DHCP_OPT_SMTPSERVER, dtype.IPV4.value),
+                                           "POP3-Server": (dhcp.DHCP_OPT_POP3SERVER, dtype.IPV4.value),
+                                           "IPv6": (DHCP_IPV6_OPCODE, dtype.IPV6.value)}  # Using unused option type
 
 
 def getHwAddr(ifname: str) -> str:
@@ -40,18 +40,22 @@ def init_client_table(mac_list: List[str], ifname_list: List[str]) -> None:
     for i in range(len(mac_list)):
         mac  = mac_list[i]
         ifname = ifname_list[i]
-        dhcp_db.db_handler.execute(" insert into clients (ifname, mac) values (?,?)", (ifname, mac))
-        dhcp_db.connection.commit()
+        cursor = dhcp_db_conn.cursor()
+        cursor.execute(" insert into clients (ifname, mac) values (?,?)", (ifname, mac))
+        dhcp_db_conn.commit()
+        cursor.close()
 
 
 def init_valid_attributes_table():
     for attr in valid_single_valued_attr:
-        dhcp_db.db_handler.execute(" insert into valid_attributes (name, opcode, max_count) values (?, ?, 1)", 
-                                     (attr, valid_single_valued_attr[attr])) 
+        cursor = dhcp_db_conn.cursor()   
+        cursor.execute(" insert into valid_attributes (name, opcode, max_count, datatype) values (?, ?, 1, ?)", 
+                                     (attr, valid_single_valued_attr[attr][0],valid_single_valued_attr[attr][1])) 
     for attr in valid_multi_valued_attr:
-        dhcp_db.db_handler.execute(" insert into valid_attributes (name, opcode, max_count) values (?, ?, 100)", 
-                                     (attr, valid_multi_valued_attr[attr])) 
-    dhcp_db.connection.commit()
+        cursor.execute(" insert into valid_attributes (name, opcode, max_count, datatype) values (?, ?, 100, ?)", 
+                                     (attr, valid_multi_valued_attr[attr][0], valid_multi_valued_attr[attr][1])) 
+    dhcp_db_conn.commit()
+    cursor.close()
 
 def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:
     for i in range(len(mac_list)):
@@ -59,17 +63,22 @@ def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists
         ifname = ifname_list[i]
         attr_list = attr_lists[i]
         for attr in attr_list:
-            dhcp_db.db_handler.execute(""" insert into host_configuration_data
+            cursor = dhcp_db_conn.cursor() 
+            cursor.execute(""" insert into host_configuration_data
                                        (ifname, mac, attr_name, attr_val) values
                                        (?, ?, ?, ?)""", (ifname, mac, attr[0], attr[1]))
-        dhcp_db.connection.commit()
+        dhcp_db_conn.commit()
+        cursor.close()
 
 
 def create_dhcp_database(mac: List[str], ifname: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:
+    if dhcp_db_conn is None:
+        init_dhcp_db()
+    cursor = dhcp_db_conn.cursor()
     for command in schema:
         print("Executing.. ", command)
-        dhcp_db.db_handler.execute(command)
-
+        cursor.execute(command)
+    cursor.close()
     init_client_table(mac, ifname)
     init_valid_attributes_table()
     init_host_conf_table(mac, ifname, attr_lists)
@@ -104,7 +113,6 @@ attr_lists = [[("IPv4", "20.0.0.1"),
               ("Domain Server", '192.168.144.60'),
               ("Name Server",  '192.168.144.66'),
               ("NETBIOS Scope", '60.0.0.5')],]
-
 create_dhcp_database(mac_list, server_if_list, attr_lists)
 
 

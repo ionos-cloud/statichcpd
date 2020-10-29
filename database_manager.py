@@ -4,7 +4,9 @@ import sqlite3
 from dpkt import dhcp
 from typing import Tuple, List, Any, Dict, Optional
 import os
-from helper import encode_option
+from datatypes import *
+from ipaddress import IPv4Address
+from enum import Enum
 
 schema = [
         """create table if not exists clients (
@@ -15,6 +17,7 @@ schema = [
            name text not null,
            opcode int not null,
            max_count int not null,
+           datatype int not null,
            constraint unique_name unique(name),
            constraint unique_opcode unique(opcode));""",
         """create table if not exists host_configuration_data (
@@ -30,49 +33,73 @@ schema = [
 DHCP_IP_OPCODE = 90  ## Either differentiate the address values with opcodes or store them in separate tables
 DHCP_IPV6_OPCODE = 91
 
-class database:
-    def fetch_ip(self, ifname: str, mac: str) -> Optional[str]:
-        self.db_handler.execute( """select attr_val from host_configuration_data
-                                 join valid_attributes on
-                                 host_configuration_data.attr_name = valid_attributes.name
-                                 where ifname=? and mac=? and valid_attributes.opcode=?""", 
-                                 (ifname, mac, DHCP_IP_OPCODE) )
-        result = dhcp_db.db_handler.fetchone()
-        if result == []:
-            return None
-        return result[0]
+class dtype(Enum):
+    IPV4 = 1
+    IPV6 = 2
+    INT16 = 3
+    INT32 = 4
+    STRING = 5
+    STATICRT = 6
 
+def fetch_ip_from_database(ifname: str, mac: str) -> Optional[str]:
+    cursor = dhcp_db_conn.cursor()
+    cursor.execute( """select attr_val from host_configuration_data
+                               join valid_attributes on
+                               host_configuration_data.attr_name = valid_attributes.name
+                               where ifname=? and mac=? and valid_attributes.opcode=?""", 
+                               (ifname, mac, DHCP_IP_OPCODE) )
+    result = cursor.fetchone()
+    cursor.close()
+    if result == []:
+        return None
+    return IPv4Address(result[0])
 
-    def fetch_host_conf_data(self, ifname: str, mac: str) -> Dict[str,Any]:
-        print("Fetching Host conf for ", ifname, " ", mac)
-        result = {}
-        # Should the presence of table be confirmed? If table is not created, this will return error
-        for (opcode, max_count, value) in self.db_handler.execute(
-                         """ select valid_attributes.opcode, valid_attributes.max_count, host_configuration_data.attr_val 
-                             from host_configuration_data
-                             join valid_attributes on 
-                             host_configuration_data.attr_name = valid_attributes.name
-                             where ifname=? and mac=?""", (ifname, mac)
-                         ):
-            if max_count == 1:                             ## Assumed that application handles insertion of attr values
-                result[opcode] = encode_option(value)     ## appropriately
+def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
+    print("Fetching Host conf for ", ifname, " ", mac)
+    result = {}
+    # Should the presence of table be confirmed? If table is not created, this will return error
+    cursor = dhcp_db_conn.cursor()
+    for (opcode, max_count, datatype, value) in cursor.execute( ## Use attr code instead of attr_name
+                     """ select valid_attributes.opcode, valid_attributes.max_count, 
+                         valid_attributes.datatype, host_configuration_data.attr_val 
+                         from host_configuration_data
+                         join valid_attributes on 
+                         host_configuration_data.attr_name = valid_attributes.name    
+                         where ifname=? and mac=?""", (ifname, mac)
+                     ):
+        if max_count == 1:                           ## Assumed that application handles insertion of attr values
+            if datatype == dtype.IPV4.value:         ## appropriately
+                result[opcode] = IPv4Address(value)
+            elif datatype == dtype.INT16.value:
+                result[opcode] = Int16(value)
+            elif datatype == dtype.INT32.value:
+                result[opcode] = Int32(value)
+            elif datatype == dtype.STRING.value:
+                result[opcode] = value
             else:
-                if opcode not in result:
-                    result[opcode] = b''
-                result[opcode] += encode_option(value)
+                print("Unknown datatype: ", datatype)
+        else:
+            if opcode not in result:
+                result[opcode] = []
+            if datatype == dtype.IPV4.value:    # Should this also be IPV4?
+                result[opcode].append(IPv4Address(value))
+            elif datatype == dtype.STATICRT.value:
+                result[opcode].append(Staticrt(value))
+            else:
+                print("Unknown datatype: ", datatype)
+    cursor.close()
+    return result
 
-        return result
+dhcp_db_name = "Static_DHCP_DB.db"
+dhcp_db_conn = None
 
-    def __init__(self):
-        self.db_name = "Static_DHCP_DB.db"
-        self.db_handler = None
-        self.connection = None
+def init_dhcp_db():
+    global dhcp_db_conn
+    if dhcp_db_conn is None:
         try:
-            self.connection = sqlite3.connect(self.db_name)
-            self.db_handler =  self.connection.cursor()
+            dhcp_db_conn = sqlite3.connect(dhcp_db_name)
         except sqlite3.Error as error:
             print("Error while connecting to sqlite", error)
-            return
 
-dhcp_db = database()
-db_handler = dhcp_db.db_handler
+init_dhcp_db()
+

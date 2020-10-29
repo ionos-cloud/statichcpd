@@ -32,7 +32,12 @@ def process_nlmsg(poller_obj: poll, nlmsg: ifinfmsg) -> None:
 
 
 def main():
-    
+    global dhcp_db_conn
+    init_dhcp_db()
+    if dhcp_db_conn is None:
+        print("Unable to connect to DHCP Database. Quitting..")
+        return
+
 # 1. Create an NL socket and bind
 
     nlsock = IPRoute()

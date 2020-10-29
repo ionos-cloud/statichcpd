@@ -6,7 +6,6 @@ from dpkt.compat import compat_ord
 import ipaddress
 from dpkt import dhcp
 from typing import Dict, List, Any, Tuple
-from ipaddress import ip_address, IPv4Address
 import struct
 
 ifname_to_sock: Dict = {}
@@ -83,57 +82,3 @@ def deregister_with_poll(poller_obj: poll, ifname: str) -> None:
 	    return
     poller_obj.unregister(socket_to_fd(intf_sock))
     del_sock_binding(ifname, intf_sock)
-
-# Packet helper functions
-
-def is_valid_ip(ip: str) -> bool:
-    return bool(not ipaddress.ip_address(ip).is_unspecified)
-
-def is_equal_ip(ip1: str, ip2: str) -> bool:
-    return ipaddress.ip_address(ip1) == ipaddress.ip_address(ip2)
-
-
-def validate_requested_ip(offer_ip: str, requested_ip: str) -> bool:
-    if offer_ip:
-        return is_valid_ip(requested_ip) and is_equal_ip(offer_ip, requested_ip)
-    elif not is_valid_ip(requested_ip):
-        return True
-    else:
-        return False
-
-def is_ipaddr(s: str) -> bool:
-    try: 
-        if type(ip_address(s)) is IPv4Address:
-             return True
-    except ValueError: 
-        return False
-
-def ip_to_int(ip: str) -> int:
-    return struct.unpack("!L", socket.inet_aton(ip))[0]
-
-def ip_to_bytes(ip: str) -> bytes:
-    return socket.inet_aton(ip)
-
-def str_to_bytes(s: str) -> bytes:
-    return bytes(s, 'utf-8')
-
-def int_to_32bits(num: int) -> bytes:
-    return num.to_bytes(4, 'big')
-
-def iplist_to_bytes(val_list: List) -> bytes:
-    new_str = b''
-    for ele in val_list:
-        new_str += ip_to_bytes(ele) 
-    return new_str
-
-def encode_option(val: Any) -> bytes:
-    if isinstance(val, str):
-        if is_ipaddr(val):
-            return ip_to_bytes(val)
-        else:
-            return str_to_bytes(val)
-    elif type(val) == list:
-        return iplist_to_bytes(val)
-    else:
-        return int_to_32bits(val)
-
