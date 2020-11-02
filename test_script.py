@@ -3,10 +3,11 @@
 import sqlite3
 from dpkt import dhcp
 from typing import Tuple, List, Any
-from database_manager import *
 import socket
 import fcntl
 import struct
+
+from statichcpd.database_manager import *
 
 valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": (dhcp.DHCP_OPT_NETMASK, dtype.IPV4.value), 
                                             "Time Offset": (dhcp.DHCP_OPT_TIMEOFFSET, dtype.INT32.value), 
@@ -91,7 +92,6 @@ ifname_list = ["veth0dummy1", "dummy0"]
 mac_list = []
 for name in ifname_list:
     mac_list.extend([getHwAddr(name)])
-print(mac_list)
 attr_lists = [[(valid_single_valued_attr["IPv4"][0], "20.0.0.1"),
               (valid_single_valued_attr["Subnet Mask"][0], "255.255.255.0"), 
               (valid_single_valued_attr["Time Offset"][0], 0xFFFFD5D0),      # Use hex to denote negative time offset

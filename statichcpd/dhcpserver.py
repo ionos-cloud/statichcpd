@@ -6,8 +6,9 @@ from pyroute2.netlink import rtnl
 from pyroute2.netlink.rtnl.ifinfmsg import ifinfmsg
 import socket
 
-from helper import *
-from dhcp_packet_mgr import *
+from .helper import *
+from .dhcp_packet_mgr import process_dhcp_packet
+from .database_manager import *
 
 #  If there is a new NL msg, add the new interface to poll if it's create 
 #  and remove the intf from poll if it's delete
@@ -31,7 +32,7 @@ def process_nlmsg(poller_obj: poll, nlmsg: ifinfmsg) -> None:
         deregister_with_poll(poller_obj, ifname)
 
 
-def main():
+def start_server():
     init_dhcp_db()
 
 # 1. Create an NL socket and bind
@@ -78,5 +79,4 @@ def main():
     
     # When should sql connection be closed?
 
-if __name__ == "__main__":
-    main()
+

@@ -4,9 +4,10 @@ import sqlite3
 from dpkt import dhcp
 from typing import Tuple, List, Any, Dict, Optional
 import os
-from datatypes import *
 from ipaddress import IPv4Address
 from enum import Enum
+
+from .datatypes import *
 
 schema = [
         """create table if not exists clients (
