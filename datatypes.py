@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from abc import ABC
+from ipaddress import IPv4Network, IPv4Address
 
 class _IntXX(ABC):
     def __repr__(self):
@@ -20,6 +21,21 @@ class Int32(_IntXX):
 
 class Staticrt():
     def __init__(self, val):
-        self.value = tuple(IPv4Address(value[0]), IPv4Address(value[1]))
+        cidr, gw = val.split(',')
+        try:
+            self.value = (IPv4Network(cidr), IPv4Address(gw))
+        except ValueError as err:
+            print("{}: Invalid route entry {}".format(err, val))
+    
+    def __bytes__(self):        # Returns a byte string in accordance with RFC 3442 DHCP Option 121
+        network = self.value[0]
+        gateway = self.value[1]
+        subnet_width = str(network.prefixlen)
+        significant_netoctets = (network.prefixlen - 1) // 8 + 1
+        destination_descriptor = subnet_width + "." + \
+                                 '.'.join((str(network.network_address).split('.'))[:significant_netoctets]) 
+        bytestr = b''.join(int(ele).to_bytes(1, 'big') for ele in destination_descriptor.split('.'))
+        bytestr += gateway.packed
+        return bytestr
 
 

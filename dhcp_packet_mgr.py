@@ -96,11 +96,9 @@ def construct_dhcp_opt_list(request_list_opt: List[int], mac: str,
                 if isinstance(data[0], IPv4Address):
                     encoded_data = b''.join([elem.packed for elem in data]) 
                 elif isinstance(data[0], Staticrt):
-                    print("Encode staticrt!")
-                    flat_data = tuple(item for sublist in data for item in sublist)
-                    encoded_data = b''.join([elem.packed for elem in flat_data]) 
+                    encoded_data = b''.join([bytes(elem) for elem in data]) 
                 else:
-                    print("Unknown elements in list!")
+                    print("Unexpected elements in list of type {}!".format(type(data[0])))
             else:
                 print("Value of unexpected type received for ", opcode)
             opt_list.append((opcode, encoded_data))

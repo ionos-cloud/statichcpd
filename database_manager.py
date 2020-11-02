@@ -29,8 +29,8 @@ schema = [
            foreign key (attr_code) references valid_attributes(opcode) on delete restrict);"""
         ]
 
-DHCP_IP_OPCODE = 90  ## Either differentiate the address values with opcodes or store them in separate tables
-DHCP_IPV6_OPCODE = 91
+DHCP_IP_OPCODE = 200  
+DHCP_IPV6_OPCODE = 201
 
 class dtype(Enum):
     IPV4 = 1

@@ -25,6 +25,7 @@ valid_multi_valued_attr: Dict[str, int] = {"Router": (dhcp.DHCP_OPT_ROUTER, dtyp
                                            "Static Route": (dhcp.DHCP_OPT_STATICROUTE, dtype.STATICRT.value),
                                            "SMTP-Server": (dhcp.DHCP_OPT_SMTPSERVER, dtype.IPV4.value),
                                            "POP3-Server": (dhcp.DHCP_OPT_POP3SERVER, dtype.IPV4.value),
+                                           "Classless Static Route": (121, dtype.STATICRT.value),
                                            "IPv6": (DHCP_IPV6_OPCODE, dtype.IPV6.value)}  # Using unused option type
 
 
@@ -63,8 +64,7 @@ def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists
         ifname = ifname_list[i]
         attr_list = attr_lists[i]
         for attr in attr_list:
-            cursor = dhcp_db_conn.cursor() 
-            print(attr[0], attr[1])
+            cursor = dhcp_db_conn.cursor()
             cursor.execute(""" insert into host_configuration_data
                                        (ifname, mac, attr_code, attr_val) values
                                        (?, ?, ?, ?)""", (ifname, mac, attr[0], attr[1]))
@@ -102,7 +102,9 @@ attr_lists = [[(valid_single_valued_attr["IPv4"][0], "20.0.0.1"),
               (valid_single_valued_attr["Hostname"][0], "myhost"),
               (valid_multi_valued_attr["Domain Server"][0], '192.168.144.56'),
               (valid_multi_valued_attr["Name Server"][0],  '192.168.144.57'),
-              (valid_single_valued_attr["NETBIOS Scope"][0], 'nbscope')],
+              (valid_single_valued_attr["NETBIOS Scope"][0], 'nbscope'),
+              (valid_multi_valued_attr["Classless Static Route"][0], '30.1.0.0/16,30.1.0.1'),
+              (valid_multi_valued_attr["Classless Static Route"][0], '20.10.10.0/24,20.10.10.1')],
               [(valid_single_valued_attr["IPv4"][0], "60.0.0.1"),
               (valid_single_valued_attr["Subnet Mask"][0], "255.255.255.0"), 
               (valid_single_valued_attr["Time Offset"][0], 1234, "int"),
