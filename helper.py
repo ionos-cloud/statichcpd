@@ -25,7 +25,11 @@ dhcp_type_to_str: Dict = {dhcp.DHCPDISCOVER : "DHCPDISCOVER",
 # Socket Helper Functions
 
 def socket_to_fd(sock: socket.socket) -> int:
-    return sock.fileno()
+    try:
+        return sock.fileno()
+    except AttributeError as err:
+        print("{}: Failed to fetch file descriptor for socket {}".format(err, sock))
+        
 
 def ifname_to_socket(ifname: str) -> socket.socket:
         return ifname_to_sock.get(ifname, None)
@@ -55,30 +59,41 @@ def add_sock_binding(poller_obj: poll, ifname: str, intf_sock: socket.socket) ->
         fd_to_ifname[socket_to_fd(intf_sock)] = ifname
 
 def del_sock_binding(ifname: str, intf_sock: socket.socket) -> None:
-        del fd_to_ifname[socket_to_fd(intf_sock)]
-        del ifname_to_sock[ifname]
+        fd = socket_to_fd(intf_sock)
+        if fd in fd_to_ifname:
+            del fd_to_ifname[fd]
+        if ifname in ifname_to_sock:
+            del ifname_to_sock[ifname]
         intf_sock.close()
 
 # Poll helper functions
 
 def register_with_poll(poller_obj: poll, ifname: str) -> None:
     if ifname_to_socket(ifname) != None:
-	    print("Ignoring already exisitng intf: ", ifname)
-	    return
+	       print("Ignoring already exisitng intf: ", ifname)
+	       return
     try:
         intf_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     except OSError:
-        print("Failed to open socket for ", ifname)
-        return
+        print("Failed to open socket for {}".format(ifname))
+        raise
     
     add_sock_binding(poller_obj, ifname, intf_sock)
     print("Polling on interface ", ifname)
-    poller_obj.register(socket_to_fd(intf_sock))
+    try:
+        poller_obj.register(socket_to_fd(intf_sock))
+    except AttributeError as err:
+        print("{}: Registering with poll failed for {}".format(err, ifname))
+        raise
 
 def deregister_with_poll(poller_obj: poll, ifname: str) -> None:
     intf_sock = ifname_to_socket(ifname)
     if not intf_sock:
-	    print("Ignoring non-exisitng intf: ", ifname)
-	    return
-    poller_obj.unregister(socket_to_fd(intf_sock))
+	       print("Ignoring non-exisitng intf: ", ifname)
+	       return
+    try:
+        poller_obj.unregister(socket_to_fd(intf_sock))
+    except KeyError as err:
+        print("{}: Deregistering with poll failed for {}".format(err, ifname))
+        raise
     del_sock_binding(ifname, intf_sock)
