@@ -2,6 +2,7 @@
 
 from abc import ABC
 from ipaddress import IPv4Network, IPv4Address
+from .logmgr import logger
 
 class _IntXX(ABC):
     def __repr__(self):
@@ -25,7 +26,7 @@ class Staticrt():
         try:
             self.value = (IPv4Network(cidr), IPv4Address(gw))
         except ValueError as err:
-            print("{}: Invalid route entry {}".format(err, val))
+            logger.error("{}: Invalid route entry {}".format(err, val))
     
     def __bytes__(self):        # Returns a byte string in accordance with RFC 3442 DHCP Option 121
         network = self.value[0]

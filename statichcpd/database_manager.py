@@ -8,6 +8,7 @@ from ipaddress import IPv4Address
 from enum import Enum
 
 from .datatypes import *
+from .logmgr import logger
 
 schema = [
         """create table if not exists clients (
@@ -42,26 +43,10 @@ class dtype(Enum):
     STATICRT = 6
 
 def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
-    print("Fetching Host conf for ", ifname, " ", mac)
+    logger.debug("Fetching Host conf for intf:{} mac:{}".format(ifname, mac))
     result = {}
 
-    # Confirm the presence of tables to avoid crashing
-
     cursor = dhcp_db_conn.cursor()
-    attr_table_exists = cursor.execute("""SELECT COUNT(*) FROM sqlite_master 
-                     WHERE type = 'table' AND name = 'valid_attributes';""")
-        
-    host_conf_exists = cursor.execute("""SELECT COUNT(*) FROM sqlite_master 
-                     WHERE type = 'table' AND name = 'host_configuration_data';""")
-    
-    if not (attr_table_exists and host_conf_exists):
-        print("Table Access Error: host_configuration_data: ", 
-              "Present " if host_conf_exists else " Absent ", 
-              " valid_attributes: ", 
-              " Present " if attr_table_exists else " Absent ")
-        cursor.close()
-        return result
-
     for (opcode, max_count, datatype, value) in cursor.execute( 
                      """ select valid_attributes.opcode, valid_attributes.max_count, 
                          valid_attributes.datatype, host_configuration_data.attr_val 
@@ -73,29 +58,29 @@ def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
         try:
             datatype = dtype(datatype)
         except ValueError as err:
-            print("Invalid datatype entry {} for opcode {} ".format(datatype, opcode))
+            logger.error("Invalid datatype entry {} for opcode {} ".format(datatype, opcode))
             cursor.close()
-            return result
+            continue   # Shouldn't remaining entries be processed for this client?
         if max_count == 1:                           ## Assumed that application handles insertion of attr values
-            if datatype == dtype.IPV4:               ## appropriately
+            if datatype is dtype.IPV4:               ## appropriately
                 result[opcode] = IPv4Address(value)
-            elif datatype == dtype.INT16:
+            elif datatype is dtype.INT16:
                 result[opcode] = Int16(value)
-            elif datatype == dtype.INT32:
+            elif datatype is dtype.INT32:
                 result[opcode] = Int32(value)
-            elif datatype == dtype.STRING:
+            elif datatype is dtype.STRING:
                 result[opcode] = value
             else:
-                print("Invalid entry (datatype, maxcount):({}, {}) ".format(datatype, max_count))
+                logger.error("Invalid entry (datatype, maxcount):({}, {}) ".format(datatype, max_count))
         else:
             if opcode not in result:
                 result[opcode] = []
-            if datatype == dtype.IPV4:               # Should this also be IPV4?
+            if datatype is dtype.IPV4:               # Should this also be IPV4?
                 result[opcode].append(IPv4Address(value))
-            elif datatype == dtype.STATICRT:
+            elif datatype is dtype.STATICRT:
                 result[opcode].append(Staticrt(value))
             else:
-                print("Invalid entry (datatype, maxcount):({}, {}) ".format(datatype, max_count))
+                logger.error("Invalid entry (datatype, maxcount):({}, {}) ".format(datatype, max_count))
     cursor.close()
     return result
 
