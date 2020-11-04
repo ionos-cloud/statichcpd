@@ -2,7 +2,6 @@
 
 import socket
 from select import poll 
-from dpkt.compat import compat_ord
 import ipaddress
 from dpkt import dhcp
 from typing import Dict, List, Any, Tuple
@@ -12,19 +11,9 @@ from .logmgr import logger
 
 ifname_to_sock: Dict = {}
 fd_to_ifname: Dict = {}
-serverip: Dict = {}
 intf_state: Dict = {}
+serverip: Dict = {}
 intf_prefix: List[str] = ['veth0dummy']
-
-dhcp_type_to_str: Dict = {dhcp.DHCPDISCOVER : "DHCPDISCOVER",
-                        dhcp.DHCPOFFER : "DHCPOFFER",
-                        dhcp.DHCPREQUEST : "DHCPREQUEST",
-                        dhcp.DHCPDECLINE : "DHCPDECLINE",
-                        dhcp.DHCPACK : "DHCPACK",
-                        dhcp.DHCPNAK : "DHCPNAK",
-                        dhcp.DHCPRELEASE : "DHCPRELEASE",
-                        dhcp.DHCPINFORM : "DHCPINFORM"  }
-
 
 # Socket Helper Functions
 
@@ -43,9 +32,6 @@ def fd_to_socket(fd: int) -> socket.socket:
     if ifname:
         return ifname_to_socket(ifname)
 
-def mac_addr(address: bytes) -> str:
-    return ':'.join('%02x' % compat_ord(b) for b in address)
-
 def is_served_intf(ifname: str) -> bool:
     return bool(list(filter(ifname.startswith, intf_prefix)))
 
@@ -55,7 +41,7 @@ def add_sock_binding(poller_obj: poll, ifname: str, intf_sock: socket.socket) ->
         try:
             intf_sock.bind(('', 67))
         except OSError:
-            logger.error("Failed to bind to the socket for ", ifname)
+            logger.error("Failed to bind to the socket for ".format(ifname))
             intf_sock.close()   # No entry is added to internal datastructs at this point and not registered with poll
             return False
 

@@ -29,14 +29,9 @@ class Staticrt():
             logger.error("{}: Invalid route entry {}".format(err, val))
     
     def __bytes__(self):        # Returns a byte string in accordance with RFC 3442 DHCP Option 121
-        network = self.value[0]
-        gateway = self.value[1]
-        subnet_width = str(network.prefixlen)
+        network, gateway = self.value
         significant_netoctets = (network.prefixlen - 1) // 8 + 1
-        destination_descriptor = subnet_width + "." + \
-                                 '.'.join((str(network.network_address).split('.'))[:significant_netoctets]) 
-        bytestr = b''.join(int(ele).to_bytes(1, 'big') for ele in destination_descriptor.split('.'))
-        bytestr += gateway.packed
-        return bytestr
-
+        subnet_width =  bytes([network.prefixlen])
+        destination_descriptor = subnet_width + ((network.network_address).packed)[:significant_netoctets]
+        return destination_descriptor + gateway.packed
 

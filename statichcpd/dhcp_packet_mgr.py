@@ -2,6 +2,7 @@
 
 import dpkt
 from dpkt import dhcp
+from dpkt.compat import compat_ord
 import struct
 from ipaddress import IPv4Address
 import socket
@@ -12,7 +13,19 @@ from .datatypes import *
 from .database_manager import *
 from .logmgr import logger
 
+dhcp_type_to_str: Dict = {dhcp.DHCPDISCOVER : "DHCPDISCOVER",
+                        dhcp.DHCPOFFER : "DHCPOFFER",
+                        dhcp.DHCPREQUEST : "DHCPREQUEST",
+                        dhcp.DHCPDECLINE : "DHCPDECLINE",
+                        dhcp.DHCPACK : "DHCPACK",
+                        dhcp.DHCPNAK : "DHCPNAK",
+                        dhcp.DHCPRELEASE : "DHCPRELEASE",
+                        dhcp.DHCPINFORM : "DHCPINFORM"  }
+
 dhcppacket_type = dhcp.DHCP
+
+def mac_addr(address: bytes) -> str:
+    return ':'.join('%02x' % compat_ord(b) for b in address)
 
 def fetch_dhcp_opt(dhcp_obj: dhcp, opt: int) -> Any:
     for t, data in dhcp_obj.opts:
@@ -124,7 +137,7 @@ def construct_dhcp_offer(dhcp_obj: dhcp, ifname: str, offer_ip: str,
     try:
         server_id = socket.inet_aton(serverip.get(ifname))
     except ValueError as err:
-        log.error("DHCP Offer: Failed to fetch IP address for {}. Removing interface from tracked list".format(ifname))
+        log.error("DHCP Offer: Failed to fetch IP address for {} ".format(ifname))
         # This case cannot happen
         # Remove the interface from being tracked
         # deregister_with_poll(ifname)
@@ -142,7 +155,7 @@ def construct_dhcp_nak(dhcp_obj: dhcp, ifname: str, requested_ip: str,
     try:
         server_id = socket.inet_aton(serverip.get(ifname))
     except ValueError as err:
-        log.error("DHCP NAK: Failed to fetch IP address for {}. Removing interface from tracked list".format(ifname))
+        log.error("DHCP NAK: Failed to fetch IP address for {}. ".format(ifname))
         ## Remove the interface from being tracked
         ## deregister_with_poll(ifname)
         return None
@@ -158,7 +171,7 @@ def construct_dhcp_ack(dhcp_obj: dhcp, ifname: str, requested_ip: str,
     try:
         server_id = socket.inet_aton(serverip.get(ifname))
     except ValueError as err:
-        log.error("DHCP ACK: Failed to fetch IP address for {}. Removing interface from tracked list".format(ifname))
+        log.error("DHCP ACK: Failed to fetch IP address for {}. ".format(ifname))
         ## Remove the interface from being tracked
         ## deregister_with_poll(ifname)
         return None
