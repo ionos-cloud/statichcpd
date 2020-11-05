@@ -41,7 +41,7 @@ def fetch_dhcp_req_ip(dhcp_obj: dhcp) -> Optional[str]:
     try:
         return IPv4Address(data)
     except Exception as err:
-        logger.error("{}: Failed to fetch requested IP".format(err))
+        logger.error("%s: Failed to fetch requested IP",err)
         return None
    
 # If giaddr != 0, send to giaddr
@@ -63,9 +63,9 @@ def fetch_destination_address(dhcp_obj: dhcp) -> Optional[IPv4Address]:
                 addr = '255.255.255.255'
             else:
                 addr = yiaddr
-                logger.debug("Unicasting the packet to {} ".format(addr))
+                logger.debug("Unicasting the packet to %s ", addr)
     except AddressValueError as err:
-        logger.error("{}: Failed to fetch destination address for DHCP packet on {}".format(err, ifname))
+        logger.error("%s: Failed to fetch destination address for DHCP packet on %s", err, ifname)
         return None
 
     return addr
@@ -109,9 +109,9 @@ def construct_dhcp_opt_list(request_list_opt: List[int], mac: str,
                 elif all(isinstance(ele, Staticrt) for ele in data):
                     encoded_data = b''.join([bytes(elem) for elem in data]) 
                 else:
-                    logger.error("Elements of unexpected type in the list: {}".format(data))
+                    logger.error("Elements of unexpected type in the list: %s".format(data))
             else:
-                logger.error("Value({}) of unexpected type received for opcode {}".format(data, opcode))
+                logger.error("Value(%s) of unexpected type received for opcode %d".format(data, opcode))
             opt_list.append((opcode, encoded_data))
     return tuple(opt_list)
           
@@ -141,7 +141,7 @@ def construct_dhcp_offer(dhcp_obj: dhcp, ifname: str, server_id: str,
 def construct_dhcp_nak(dhcp_obj: dhcp, ifname: str, server_id: str, 
                        requested_ip: str, request_list_opt: List[int], 
                        host_conf_data: Dict[str, str]) -> Optional[dhcppacket_type]:
-    logger.debug("Server IP for NAK: ".format(server_id))
+    logger.debug("Server IP for NAK: %s", server_id)
     opt_list = construct_dhcp_opt_list(request_list_opt, mac_addr(dhcp_obj.chaddr), ifname, host_conf_data)
     opt_list = append_msg_type_and_server_id(opt_list, dhcp.DHCPNAK, server_id)
     return construct_dhcp_packet(dhcp_obj, requested_ip, opt_list)
@@ -149,7 +149,7 @@ def construct_dhcp_nak(dhcp_obj: dhcp, ifname: str, server_id: str,
 def construct_dhcp_ack(dhcp_obj: dhcp, ifname: str, server_id: str,
                        requested_ip: str, request_list_opt: List[int], 
                        host_conf_data: Dict[str, str]) -> Optional[dhcppacket_type]:
-    logger.debug("Server IP for ACK: {}".format(server_id))
+    logger.debug("Server IP for ACK: %s", server_id)
     opt_list = construct_dhcp_opt_list(request_list_opt, mac_addr(dhcp_obj.chaddr), ifname, host_conf_data)
     opt_list = append_msg_type_and_server_id(opt_list, dhcp.DHCPACK, server_id)
     return construct_dhcp_packet(dhcp_obj, requested_ip, opt_list)
@@ -163,18 +163,18 @@ def process_dhcp_discover(dhcp_obj: dhcp, server_id: str, ifname: str) -> Option
     host_conf_data = fetch_host_conf_data(ifname, client_mac)
 
     if not host_conf_data:
-        logger.debug("No configuration data found for the host {} on intf {}. Skipping ..".format(client_mac, ifname))
+        logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", client_mac, ifname)
         return (None, None)
     
     offer_ip = None
     if DHCP_IP_OPCODE in host_conf_data:
         offer_ip = host_conf_data[DHCP_IP_OPCODE]
         if offer_ip:
-            logger.debug("Constructing DHCP OFFER with IP:{} ".format(offer_ip))
+            logger.debug("Constructing DHCP OFFER with IP: %s ", offer_ip)
 
     dhcp_offer = construct_dhcp_offer(dhcp_obj, ifname, server_id, offer_ip, request_list_opt, host_conf_data)
     if not dhcp_offer:
-        logger.error("Failed to construct DHCP offer packet on interface {}".format(ifname))
+        logger.error("Failed to construct DHCP offer packet on interface %s", ifname)
         return (None, None)
         
     data = bytes(dhcp_offer)
@@ -192,7 +192,7 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: str, ifname: str) -> Optiona
     host_conf_data = fetch_host_conf_data(ifname, client_mac)
     
     if not host_conf_data:
-        logger.debug("No configuration data found for the host {} on intf {}. Skipping ..".format(client_mac, ifname))
+        logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", client_mac, ifname)
         return (None, None)
         
     offer_ip = None
@@ -201,7 +201,7 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: str, ifname: str) -> Optiona
 
     # Validate the requested IP
     if offer_ip:
-        logger.debug("Constructing DHCP OFFER with IP: ".format(offer_ip))
+        logger.debug("Constructing DHCP OFFER with IP: %s", offer_ip)
         is_valid_request = (not requested_ip.is_unspecified and 
                             not offer_ip.is_unspecified and 
                             offer_ip == requested_ip)
@@ -213,18 +213,18 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: str, ifname: str) -> Optiona
     dhcp_packet = None
 
     if is_valid_request:
-        logger.debug("Constructing DHCP Accept with IP: ".format(requested_ip))
+        logger.debug("Constructing DHCP Accept with IP: %s", requested_ip)
         request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
         dhcp_packet = construct_dhcp_ack(dhcp_obj, ifname, server_id, requested_ip, request_list_opt, host_conf_data)
         #send_packet(dhcp_ack, ifname, dhcp_obj)
     else:
         request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
-        logger.debug("Requested IP ({}) doesn't match available IP ({})".format(requested_ip, offer_ip))
+        logger.debug("Requested IP (%s) doesn't match available IP (%s)", requested_ip, offer_ip)
         dhcp_packet = construct_dhcp_nak(dhcp_obj, ifname, server_id, requested_ip, request_list_opt, host_conf_data)
         #send_packet(dhcp_nak, ifname, dhcp_obj)
 
     if dhcp_packet is None:
-        logger.error("Failed to construct DHCP response packet on interface {}".format(ifname))
+        logger.error("Failed to construct DHCP response packet on interface %s", ifname)
         return (None, None)
         
     data = bytes(dhcp_packet)
@@ -238,12 +238,12 @@ def process_dhcp_packet(ifname: str, server_addr: str, msg: bytes) -> Optional[T
 
     dhcp_obj = dpkt.dhcp.DHCP(msg)
     dhcp_type = fetch_dhcp_type(dhcp_obj)
-    logger.debug("Received DHCP packet on {} of type {}".format(ifname, dhcp_type_to_str[dhcp_type]))
+    logger.debug("Received DHCP packet on %s of type %s", ifname, dhcp_type_to_str[dhcp_type])
 
     try:
         server_id = socket.inet_aton(server_addr)
     except ValueError as err:
-        logger.error("Invalid IP address for {} while processing DHCP packet. ".format(ifname))
+        logger.error("Invalid IP address for %s while processing DHCP packet", ifname)
         return (None, None)
 
     if (dhcp_type == dhcp.DHCPDISCOVER):
@@ -252,6 +252,6 @@ def process_dhcp_packet(ifname: str, server_addr: str, msg: bytes) -> Optional[T
         return process_dhcp_request(dhcp_obj, server_id, ifname)
     else:
         # Handle other packet types!!
-        logger.debug("Unexpected DHCP packet type to server: ".format(dhcp_type_to_str[dhcp_type]))
+        logger.debug("Unexpected DHCP packet type to server: %s", dhcp_type_to_str[dhcp_type])
     return (None, None)
 
