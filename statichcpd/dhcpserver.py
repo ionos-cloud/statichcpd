@@ -10,6 +10,7 @@ from logging import Logger
 from typing import Dict, List, Any, Tuple, TypeVar
 import netifaces as ni
 from dpkt import dhcp
+import re
 
 from .dhcp_packet_mgr import process_dhcp_packet
 from .database_manager import *
@@ -19,6 +20,8 @@ from .logmgr import logger
 #  and remove the intf from poll if it's delete
 
 any_nlmsg = TypeVar('any_nlmsg', ifinfmsg, ifaddrmsg)
+servername_pattern = ''
+server_regexobj = None
 
 # An interface cache entry exists only for an interface whose state is UP 
 # OR has a valid IP address configured. At any point, if the interface state
@@ -73,10 +76,8 @@ class InterfaceCache(object):
 
 ifcache = InterfaceCache()
 
-intf_prefix: List[str] = ['veth0dummy']
-
 def is_served_intf(ifname: str) -> bool:
-    return bool(list(filter(ifname.startswith, intf_prefix)))
+    return bool(server_regexobj.search(ifname))
 
 def add_sock_binding(ifname: str) -> Optional[socket.socket]:
     # Create a socket
@@ -231,7 +232,10 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
             ifcache.delete_ifcache_entry(ifcache_entry)
 
 def start_server():
+    global server_regexobj
+
     init_dhcp_db()
+    server_regexobj = re.compile(servername_pattern)
 
 # 1. Create an NL socket and bind
     nlsock = IPRoute()
@@ -298,7 +302,15 @@ def start_server():
                     intf_sock = ifcache_entry.sock
                     if intf_sock:
                         ifname = ifcache_entry.ifname
-                        msg, saddr = intf_sock.recvfrom(1024)
+                        try:
+                            msg, saddr = intf_sock.recvfrom(1024)
+                        except OSError as err:
+                            logger.error('''%s: Failed to receive packet on %s. 
+                                          Removing interface from cache''', err, ifname)
+                            stop_polling(poller_obj, ifname)
+                            ifcache_entry.sock.close()
+                            ifcache.delete_ifcache_entry(ifcache_entry)
+                            continue
                         server_ip = ifcache_entry.ip
                         if server_ip is None:
                             logger.error("Received DHCP packet on %s with no IP address", ifname)
@@ -309,5 +321,14 @@ def start_server():
                         if data is None or address is None:
                             logger.debug("No DHCP response sent for packet on %s", ifname)
                             continue
-                        intf_sock.sendto(data, (address, 68))
+                        try:
+                            intf_sock.sendto(data, (address, 68))
+                        except OSError as err:
+                            logger.error('''%s: Failed to send packet on %s. 
+                                          Removing interface from cache''', err, ifname)
+                            stop_polling(poller_obj, ifname)
+                            ifcache_entry.sock.close()
+                            ifcache.delete_ifcache_entry(ifcache_entry)
+                            continue
+
 

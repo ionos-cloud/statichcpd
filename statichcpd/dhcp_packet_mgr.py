@@ -22,6 +22,8 @@ dhcp_type_to_str: Dict = {dhcp.DHCPDISCOVER : "DHCPDISCOVER",
                         dhcp.DHCPINFORM : "DHCPINFORM"  }
 
 dhcppacket_type = dhcp.DHCP
+default_lease_time = 0
+max_lease_time = 0
 
 def mac_addr(address: bytes) -> str:
     return ':'.join('%02x' % compat_ord(b) for b in address)
@@ -52,9 +54,9 @@ def fetch_dhcp_req_ip(dhcp_obj: dhcp) -> Optional[str]:
 def fetch_destination_address(dhcp_obj: dhcp) -> Optional[IPv4Address]:
     try:
         if not IPv4Address(dhcp_obj.giaddr).is_unspecified:
-            addr = IPv4Address(dhcp_obj.giaddr)
+            addr = str(IPv4Address(dhcp_obj.giaddr))
         elif not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
-            addr = IPv4Address(dhcp_obj.ciaddr)
+            addr = str(IPv4Address(dhcp_obj.ciaddr))
         else:
             yiaddr = IPv4Address(dhcp_obj.yiaddr)
             is_broadcast = dhcp_obj.flags & (1 << 0) 
@@ -62,20 +64,30 @@ def fetch_destination_address(dhcp_obj: dhcp) -> Optional[IPv4Address]:
                 logger.debug("Broadcasting packet...")
                 addr = '255.255.255.255'
             else:
-                addr = yiaddr
+                addr = str(yiaddr)
                 logger.debug("Unicasting the packet to %s ", addr)
     except AddressValueError as err:
         logger.error("%s: Failed to fetch destination address for DHCP packet on %s", err, ifname)
         return None
-
+    print(addr)
     return addr
 
-
-
-def append_msg_type_and_server_id(opt_tuple: Tuple, option: str, server_id: str) -> Tuple:
+def fetch_addr_lease_time(dhcp_obj: dhcp, opt_tuple: Tuple):
     opt_list = list(opt_tuple)
-    
+    lease_time = default_lease_time
+
+    # If a lease time is requested by client, validate and assign accordingly
+    if dhcp.DHCP_OPT_LEASE_SEC in opt_list:
+        req_lease_time = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_LEASE_SEC)
+        if req_lease_time <= max_lease_time:
+            lease_time = req_lease_time
+    return lease_time
+
+def append_mandatory_options(dhcp_obj: dhcp, opt_tuple: Tuple, option: str, server_id: str) -> Tuple:
+    opt_list = list(opt_tuple)
+    lease_time = fetch_addr_lease_time(dhcp_obj, opt_tuple) 
     opt_list.extend([(dhcp.DHCP_OPT_MSGTYPE, bytes([option])),
+                     (dhcp.DHCP_OPT_LEASE_SEC, (lease_time).to_bytes(4, 'big')),
                      (dhcp.DHCP_OPT_SERVER_ID, server_id),
                      (255, b'')])
    
@@ -116,13 +128,13 @@ def construct_dhcp_opt_list(request_list_opt: List[int], mac: str,
     return tuple(opt_list)
           
 def construct_dhcp_packet(dhcp_obj: dhcp, client_ip: str, opt_list: Tuple) -> dhcppacket_type:
-     
+    client_addr = int(client_ip) if client_ip is not None else 0 
     dhcp_packet = dhcp.DHCP(
             op=dhcp.DHCP_OP_REPLY, #htype='ETHERNET', 
             hlen=bytes([6]), hops=0, xid=dhcp_obj.xid, 
             secs=0, flags=dhcp_obj.flags, 
             ciaddr=dhcp_obj.ciaddr, 
-            yiaddr=int(client_ip), 
+            yiaddr=client_addr, 
             siaddr=dhcp_obj.siaddr,  # What should be filled?
             giaddr=dhcp_obj.giaddr,  # What should be filled? 
             chaddr=dhcp_obj.chaddr, sname=b'', 
@@ -135,7 +147,7 @@ def construct_dhcp_offer(dhcp_obj: dhcp, ifname: str, server_id: str,
     opt_list = construct_dhcp_opt_list(request_list_opt, mac_addr(dhcp_obj.chaddr), ifname, host_conf_data)
     if offer_ip is None and not opt_list: # If no other parameters were requested by client, should offer be sent?
         return (None, None)
-    opt_list = append_msg_type_and_server_id(opt_list, dhcp.DHCPOFFER, server_id)
+    opt_list = append_mandatory_options(dhcp_obj, opt_list, dhcp.DHCPOFFER, server_id)
     return construct_dhcp_packet(dhcp_obj, offer_ip, opt_list)
 
 def construct_dhcp_nak(dhcp_obj: dhcp, ifname: str, server_id: str, 
@@ -143,7 +155,7 @@ def construct_dhcp_nak(dhcp_obj: dhcp, ifname: str, server_id: str,
                        host_conf_data: Dict[str, str]) -> Optional[dhcppacket_type]:
     logger.debug("Server IP for NAK: %s", server_id)
     opt_list = construct_dhcp_opt_list(request_list_opt, mac_addr(dhcp_obj.chaddr), ifname, host_conf_data)
-    opt_list = append_msg_type_and_server_id(opt_list, dhcp.DHCPNAK, server_id)
+    opt_list = append_mandatory_options(dhcp_obj, opt_list, dhcp.DHCPNAK, server_id)
     return construct_dhcp_packet(dhcp_obj, requested_ip, opt_list)
 
 def construct_dhcp_ack(dhcp_obj: dhcp, ifname: str, server_id: str,
@@ -151,7 +163,7 @@ def construct_dhcp_ack(dhcp_obj: dhcp, ifname: str, server_id: str,
                        host_conf_data: Dict[str, str]) -> Optional[dhcppacket_type]:
     logger.debug("Server IP for ACK: %s", server_id)
     opt_list = construct_dhcp_opt_list(request_list_opt, mac_addr(dhcp_obj.chaddr), ifname, host_conf_data)
-    opt_list = append_msg_type_and_server_id(opt_list, dhcp.DHCPACK, server_id)
+    opt_list = append_mandatory_options(dhcp_obj, opt_list, dhcp.DHCPACK, server_id)
     return construct_dhcp_packet(dhcp_obj, requested_ip, opt_list)
 
 # In case of DHCP Discover
@@ -202,7 +214,8 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: str, ifname: str) -> Optiona
     # Validate the requested IP
     if offer_ip:
         logger.debug("Constructing DHCP OFFER with IP: %s", offer_ip)
-        is_valid_request = (not requested_ip.is_unspecified and 
+        is_valid_request = (requested_ip and
+                            not requested_ip.is_unspecified and 
                             not offer_ip.is_unspecified and 
                             offer_ip == requested_ip)
     else:

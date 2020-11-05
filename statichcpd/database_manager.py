@@ -10,6 +10,9 @@ from enum import Enum
 from .datatypes import *
 from .logmgr import logger
 
+dhcp_db_name = None
+dhcp_db_conn = None
+
 schema = [
         """create table if not exists clients (
            ifname text not null,
@@ -84,15 +87,13 @@ def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
     cursor.close()
     return result
 
-dhcp_db_name = "Static_DHCP_DB.db"
-dhcp_db_conn = None
-
 def init_dhcp_db():
-    global dhcp_db_conn
+    global dhcp_db_conn, dhcp_db_name
     if dhcp_db_conn is None:
+        dhcp_db_name = str(dhcp_db_name) if type(dhcp_db_name) is not str else dhcp_db_name
+        print("Connecting to ", dhcp_db_name)
         dhcp_db_conn = sqlite3.connect(dhcp_db_name)
         if dhcp_db_conn is None:
             raise Exception("Connecting to DHCP db {} failed".format(dhcp_db_name))
 
-init_dhcp_db()
 

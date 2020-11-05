@@ -8,6 +8,7 @@ import fcntl
 import struct
 
 from statichcpd.database_manager import *
+conn = None
 
 valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": (dhcp.DHCP_OPT_NETMASK, dtype.IPV4.value), 
                                             "Time Offset": (dhcp.DHCP_OPT_TIMEOFFSET, dtype.INT32.value), 
@@ -42,21 +43,21 @@ def init_client_table(mac_list: List[str], ifname_list: List[str]) -> None:
     for i in range(len(mac_list)):
         mac  = mac_list[i]
         ifname = ifname_list[i]
-        cursor = dhcp_db_conn.cursor()
+        cursor = conn.cursor()
         cursor.execute(" insert into clients (ifname, mac) values (?,?)", (ifname, mac))
-        dhcp_db_conn.commit()
+        conn.commit()
         cursor.close()
 
 
 def init_valid_attributes_table():
     for attr in valid_single_valued_attr:
-        cursor = dhcp_db_conn.cursor()   
+        cursor = conn.cursor()   
         cursor.execute(" insert into valid_attributes (name, opcode, max_count, datatype) values (?, ?, 1, ?)", 
                                      (attr, valid_single_valued_attr[attr][0],valid_single_valued_attr[attr][1])) 
     for attr in valid_multi_valued_attr:
         cursor.execute(" insert into valid_attributes (name, opcode, max_count, datatype) values (?, ?, 100, ?)", 
                                      (attr, valid_multi_valued_attr[attr][0], valid_multi_valued_attr[attr][1])) 
-    dhcp_db_conn.commit()
+    conn.commit()
     cursor.close()
 
 def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:
@@ -65,18 +66,19 @@ def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists
         ifname = ifname_list[i]
         attr_list = attr_lists[i]
         for attr in attr_list:
-            cursor = dhcp_db_conn.cursor()
+            cursor = conn.cursor()
             cursor.execute(""" insert into host_configuration_data
                                        (ifname, mac, attr_code, attr_val) values
                                        (?, ?, ?, ?)""", (ifname, mac, attr[0], attr[1]))
-        dhcp_db_conn.commit()
+        conn.commit()
         cursor.close()
 
 
 def create_dhcp_database(mac: List[str], ifname: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:
-    if dhcp_db_conn is None:
-        init_dhcp_db()
-    cursor = dhcp_db_conn.cursor()
+    global conn
+    if conn is None:
+        conn = sqlite3.connect('Static_DHCP_DB.db')
+    cursor = conn.cursor()
     for command in schema:
         print("Executing.. ", command)
         cursor.execute(command)
@@ -84,8 +86,6 @@ def create_dhcp_database(mac: List[str], ifname: List[str], attr_lists: List[Lis
     init_client_table(mac, ifname)
     init_valid_attributes_table()
     init_host_conf_table(mac, ifname, attr_lists)
-
-
 
 server_if_list  = ["veth0dummy0", "veth0dummy0"]
 ifname_list = ["veth0dummy1", "dummy0"]
@@ -116,6 +116,5 @@ attr_lists = [[(valid_single_valued_attr["IPv4"][0], "20.0.0.1"),
               (valid_multi_valued_attr["Domain Server"][0], '192.168.144.60'),
               (valid_multi_valued_attr["Name Server"][0],  '192.168.144.66'),
               (valid_single_valued_attr["NETBIOS Scope"][0], '60.0.0.5')],]
+
 create_dhcp_database(mac_list, server_if_list, attr_lists)
-
-
