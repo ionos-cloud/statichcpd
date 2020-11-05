@@ -20,110 +20,127 @@ from .logmgr import logger
 
 any_nlmsg = TypeVar('any_nlmsg', ifinfmsg, ifaddrmsg)
 
-class ifstate(Enum):
-    UP = 1
-    DOWN = 2
+# An interface cache entry exists only for an interface whose state is UP 
+# OR has a valid IP address configured. At any point, if the interface state
+# becomes down and IP is also deleted, the entry will get erased
 
-ifname_to_sock: Dict = {}
-fd_to_ifname: Dict = {}
-intf_state: Dict = {}
-serverip: Dict = {}
+class InterfaceCacheEntry():
+    def __init__(self, fd, sock, ifname):
+        self.fd = fd
+        self.sock = sock
+        self.ifname = ifname
+        self._ip = None
+        self._up = False
+
+    @property
+    def ip(self):
+        return self._ip
+
+    @ip.setter
+    def ip(self, val):
+        self._ip = val
+
+    @property
+    def up(self):
+        return self._up
+
+    @up.setter
+    def up(self, val):
+        if type(val) is bool:
+            self._up = val
+
+class InterfaceCache(object):
+    def __init__(self):
+        self._by_fd = {}
+        self._by_ifname = {}
+
+    def add_ifcache_entry(self, fd, sock, ifname):
+        entry = InterfaceCacheEntry(fd, sock, ifname)
+        self._by_fd[fd] = entry
+        self._by_ifname[ifname] = entry
+        return entry
+
+    def delete_ifcache_entry(self, entry):
+        logger.debug("Deleting cache entry for %s", entry.ifname)
+        del self._by_fd[entry.fd]
+        del self._by_ifname[entry.ifname]
+
+    def fetch_ifcache_by_fd(self, fd):
+        return self._by_fd.get(fd)
+
+    def fetch_ifcache_by_ifname(self, ifname):
+        return self._by_ifname.get(ifname)
+
+ifcache = InterfaceCache()
+
 intf_prefix: List[str] = ['veth0dummy']
-
-# Socket Helper Functions
-
-def socket_to_fd(sock: socket.socket) -> int:
-    try:
-        return sock.fileno()
-    except AttributeError as err:
-        logger.error("{}: Failed to fetch file descriptor for socket {}".format(err, sock))
-        
-
-def ifname_to_socket(ifname: str) -> socket.socket:
-        return ifname_to_sock.get(ifname, None)
-
-def fd_to_socket(fd: int) -> socket.socket:
-    ifname = fd_to_ifname.get(fd, None)
-    if ifname:
-        return ifname_to_socket(ifname)
 
 def is_served_intf(ifname: str) -> bool:
     return bool(list(filter(ifname.startswith, intf_prefix)))
 
-def add_sock_binding(poller_obj: poll, ifname: str, intf_sock: socket.socket) -> bool:
-        intf_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, ifname.encode())
-        intf_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        try:
-            intf_sock.bind(('', 67))
-        except OSError:
-            logger.error("Failed to bind to the socket for ".format(ifname))
-            intf_sock.close()   # No entry is added to internal datastructs at this point and not registered with poll
-            return False
-
-        ifname_to_sock[ifname] = intf_sock
-        fd_to_ifname[socket_to_fd(intf_sock)] = ifname
-        return True
-
-def del_sock_binding(ifname: str, intf_sock: socket.socket) -> None:
-    if intf_sock:
-        fd = socket_to_fd(intf_sock)
-        if fd in fd_to_ifname:
-            del fd_to_ifname[fd]
-        if ifname in ifname_to_sock:
-            del ifname_to_sock[ifname]
-        intf_sock.close()
-
-# Poll helper functions
-
-def register_with_poll(poller_obj: poll, ifname: str, interface_ip: str) -> None:
-    if ifname_to_socket(ifname) != None:
-        if interface_ip == serverip.get(ifname):
-	           logger.debug("Ignoring already exisitng intf: ".format(ifname))
-	           return
-        # Case of IP updation: Update the IP address mapping for the interface
-        serverip[ifname] = interface_ip
-        logger.debug("Updated serverip for intf {} : {}".format(ifname, serverip))
-
-    
+def add_sock_binding(ifname: str) -> Optional[socket.socket]:
     # Create a socket
     try:
         intf_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     except OSError:
         logger.error("Failed to open socket for {}. Skipping poll registration".format(ifname))
-        return
-    
-    # Bind the socket and set socket options
-    add_success = add_sock_binding(poller_obj, ifname, intf_sock)
-    if not add_success:
-        logger.error("Failed to add socket binding for {}. Not registering intf with poll".format(ifname))
-        return
+        return None
 
-    # Case of new IP addition: Add the IP address mapping for the interface
-    serverip[ifname] = interface_ip
-    logger.debug("Created serverip for intf {} : {} ".format(ifname, serverip))
-
-    # Register with poller object
-    logger.debug("Polling on interface ".format(ifname))
     try:
-        poller_obj.register(socket_to_fd(intf_sock))
+        fd = intf_sock.fileno()
+    except AttributeError as err:
+        logger.error("{}: Failed to fetch file descriptor for socket {}".format(err, intf_sock))
+        return None
+    
+    # Bind the socket
+
+    intf_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, ifname.encode())
+    intf_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    
+    try:
+        intf_sock.bind(('', 67))
+    except OSError:
+        logger.error("Failed to bind to the socket for ".format(ifname))
+        intf_sock.close()   # No entry is added to internal datastructs at this point and not registered with poll
+        return None
+
+    return intf_sock
+
+# Registration with poll is only done for an interface whose state is UP 
+# AND has a valid IP address configured. At any point, if the interface state
+# becomes down or IP is deleted, the interface will be de-registered
+
+
+def start_polling(poller_obj: poll, intf_sock: socket.socket, ifname: str) -> None:
+    # Can we reach here for an already polled interface??
+ 
+    # Register with poller object
+    logger.debug("Registering fd: {} with poll".format(intf_sock.fileno()))
+    try:
+        poller_obj.register(intf_sock.fileno())
+        logger.debug("Polling on interface {}".format(ifname))
     except AttributeError as err:
         logger.error("{}: Registering with poll failed for {}".format(err, ifname))
-        intf_sock = ifname_to_socket(ifname)
-        # Cleanup the socket binding and IP address mapping from internal datastructures
-        del_sock_binding(ifname, intf_sock)
-        del serverip[ifname]
+        # Cleanup the socket binding and cache entry: 
+        # To re-register the intf, restart of process/reconfiguration of intf will be required! - Better way?
+        intf_sock.close()
+        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
+        if ifcache_entry:
+            ifcache.delete_ifcache_entry(ifcache_entry)
 
-def deregister_with_poll(poller_obj: poll, ifname: str) -> None:
-    intf_sock = ifname_to_socket(ifname)
-    if not intf_sock:
-	       logger.debug("Ignoring non-exisitng intf: {}".format(ifname))
+def stop_polling(poller_obj: poll, ifname: str) -> None:
+    ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
+    if ifcache_entry is None or \
+       ifcache_entry.ip is None or \
+       ifcache_entry.up is False:
+	       logger.debug("Ignoring non-registered intf: {}".format(ifname))
 	       return
+    logger.debug("Deregistering fd: {}".format(ifcache_entry.fd))
     try:
-        poller_obj.unregister(socket_to_fd(intf_sock))
+        poller_obj.unregister(ifcache_entry.fd)
     except KeyError as err:
         logger.error("{}: Deregistering with poll failed for {}".format(err, ifname))
-    del_sock_binding(ifname, intf_sock)
-    del serverip[ifname]
+
 def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
     nl_event = nlmsg['event']
     if nl_event not in ['RTM_NEWLINK', 'RTM_DELLINK', 'RTM_NEWADDR', 'RTM_DELADDR']:
@@ -131,52 +148,92 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
     if nl_event == 'RTM_NEWLINK':
         ifname = nlmsg.IFLA_IFNAME.value
         state = nlmsg.IFLA_OPERSTATE.value
-        if is_served_intf(ifname):
-            if state == 'LOWERLAYERDOWN' or state == 'DOWN':
-                intf_state[ifname] = ifstate.DOWN.value
-                logger.debug("Set state down for {} ".format(ifname))
+        if not is_served_intf(ifname):
+            return
+        
+        if state == 'LOWERLAYERDOWN' or state == 'DOWN':
+            logger.debug("State change to DOWN for {} ".format(ifname))
+            ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
+            # When the state is down, stop polling
+            if ifcache_entry is None:
                 return
-            # Case where interface state is UP
-            intf_state[ifname] = ifstate.UP.value
-            logger.debug("{} notif for {} ".format(nl_event, ifname))
-            try:
-                interface_ip = ni.ifaddresses(ifname)[ni.AF_INET][0]['addr']
-            except:
-                logger.error("No IP address configuration found on {}. Skipping poll registration".format(ifname))
+            stop_polling(poller_obj, ifname)
+            ifcache_entry.up = False
+            # If the IP address is also None, remove the cache entry
+            if ifcache_entry.ip is None:
+                ifcache_entry.sock.close()
+                ifcache.delete_ifcache_entry(ifcache_entry)
+            return
+        # If the state is up and IP is present, start polling
+        # If the state is up and no IP is present, just update the up state
+        logger.debug("State change to UP for {} ".format(ifname))
+        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
+        if ifcache_entry is not None:
+            ifcache_entry.up = True
+            if ifcache_entry.ip is not None:
+                start_polling(poller_obj, ifcache_entry.sock, ifname)
+        else:
+            # Create/bind the socket and set socket options
+            intf_sock = add_sock_binding(ifname)
+            if intf_sock is None:
+                logger.error("Failed to add socket binding for {}. Not registering intf with poll".format(ifname))
                 return
-            else:
-                register_with_poll(poller_obj, ifname, interface_ip)
+            # Add a new intf cache entry and set the up state to True
+            ifcache_entry = ifcache.add_ifcache_entry(intf_sock.fileno(), intf_sock, ifname)
+            ifcache_entry.up = True
     elif nl_event == 'RTM_DELLINK':
         ifname = nlmsg.IFLA_IFNAME.value
+        if not is_served_intf(ifname):
+            return
         logger.debug("{} notif for {} ".format(nl_event, ifname))
-        if is_served_intf(ifname):
-            if ifname in intf_state:
-                logger.debug("Deleting state entry for {} val {}".format(ifname, intf_state[ifname]))
-                del intf_state[ifname]
-            deregister_with_poll(poller_obj, ifname)
+        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
+        if not ifcache_entry:
+            return
+        # On link delete, stop polling, close the socket and delete the cache entry
+        stop_polling(poller_obj, ifname)
+        ifcache_entry.sock.close()
+        ifcache.delete_ifcache_entry(ifcache_entry)
     elif nl_event == 'RTM_NEWADDR':
         ifname = nlmsg.IFA_LABEL.value
-        if is_served_intf(ifname):
-            logger.debug("ifname {}".format(ifname))
-            upstate = bool(ifname in intf_state and intf_state[ifname] == ifstate.UP.value) 
-            if not upstate:
-                logger.error("{} notif for intf {} in DOWN state. Skipping poll registration".format(nl_event, ifname))
-                return
-            ifaddr = nlmsg.IFA_ADDRESS.value
+        if not is_served_intf(ifname):
+            return
+        ifaddr = nlmsg.IFA_ADDRESS.value
+        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
+        if ifcache_entry is not None:
             logger.debug("{} notif for {} IP {}".format(nl_event, ifname, ifaddr))
-            # Fetch IP address and update internal DB and register with poll
-            register_with_poll(poller_obj, ifname, ifaddr)
+            ifcache_entry.ip = ifaddr 
+            if ifcache_entry.up is True:
+                start_polling(poller_obj, ifcache_entry.sock, ifname)  # How to handle IPv6 (Multiple address case): "polled= true/false"?
+        else:
+            # Create/bind the socket and set socket options
+            intf_sock = add_sock_binding(ifname)
+            if intf_sock is None:
+                logger.error("Failed to add socket binding for {}. Not registering intf with poll".format(ifname))
+                return
+            # Add a new intf cache entry and set the up state to True
+            ifcache_entry = ifcache.add_ifcache_entry(intf_sock.fileno(), intf_sock, ifname)
+            ifcache_entry.ip = ifaddr
     else: # Case of RTM_DELADDR
         ifname = nlmsg.IFA_LABEL.value
-        if is_served_intf(ifname):
-            logger.debug("{} notif for {} ".format(nl_event, ifname))
-            deregister_with_poll(poller_obj, ifname)
+        if not is_served_intf(ifname):
+            return
+        logger.debug("{} notif for {} ".format(nl_event, ifname))
+        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
+        # When the IP is removed, stop polling and retain the cache entry until link delete
+        if not ifcache_entry:
+            return
+            
+        stop_polling(poller_obj, ifname)
+        ifcache_entry.ip = None
+        # If state is also DOWN, remove the cache entry
+        if ifcache_entry.up is False:
+            ifcache_entry.sock.close()
+            ifcache.delete_ifcache_entry(ifcache_entry)
 
 def start_server():
     init_dhcp_db()
 
 # 1. Create an NL socket and bind
-
     nlsock = IPRoute()
     try:
         nlsock.bind(groups=(rtnl.RTMGRP_LINK | rtnl.RTMGRP_IPV4_IFADDR))
@@ -190,43 +247,67 @@ def start_server():
     logger.debug("Registered Netlink socket for polling...")
 
 
-# 3. Add any existing served interfaces with IP address to the poll list if it's UP (to handle cases of process restart)
+# 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
+#    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
 
     for intf in nlsock.get_links():
         state = intf.IFLA_OPERSTATE.value
         ifname = intf.IFLA_IFNAME.value
-        if is_served_intf(ifname) and state == 'UP':
-            for addr in nlsock.get_addr():   ## Look for more efficient way
-                if ifname == addr.IFA_LABEL.value:
-                    ifaddr = addr.IFA_ADDRESS.value
-                    logger.debug("Adding an existing interface: {} addr: {}".format(ifname, ifaddr))
-                    intf_state[ifname] = ifstate.UP.value
-                    register_with_poll(poller_obj, ifname, ifaddr)
-                    break
+        if is_served_intf(ifname):
+            # Check if there is an IP configured
+            try:
+                interface_ip = ni.ifaddresses(ifname)[ni.AF_INET][0]['addr']
+            except KeyError:
+                logger.error("No IP address configuration found on {}. Skipping poll registration".format(ifname))
+                interface_ip = None 
+
+            # If the state is DOWN and has no IP, skip this interface  
+            if state != 'UP' and interface_ip is None:
+                continue
+                
+            # Create/bind the socket and set socket options
+            intf_sock = add_sock_binding(ifname)
+
+            if intf_sock is None:
+                logger.error("Failed to add socket binding for {}. Not registering intf with poll".format(ifname))
+                continue
+
+            # Add a new intf cache entry
+            ifcache_entry = ifcache.add_ifcache_entry(intf_sock.fileno(), intf_sock, ifname)
+
+            ifcache_entry.up = bool(state == 'UP')
+            ifcache_entry.ip = interface_ip
+
+            # If IP is configured and state is also UP, start polling
+            if ifcache_entry.up and ifcache_entry.ip is not None:
+                start_polling(poller_obj, ifcache_entry.sock, ifname)
 
 # 4. Keep checking for any events on the polled FDs and process them
     while True:
         fdEvent = poller_obj.poll(1024)
         for fd, event in fdEvent:
             if event & POLLIN:                    #TODO: Add code to handle other events
-                if fd == socket_to_fd(nlsock):
+                if fd == nlsock.fileno():
                     for nlmsg in nlsock.get():
                         process_nlmsg(poller_obj, nlmsg)
                 else:
-                    intf_sock = fd_to_socket(fd)
+                    ifcache_entry = ifcache.fetch_ifcache_by_fd(fd)
+                    if not ifcache_entry:
+                        logger.error("Received packet on untracked fd {}!".format(fd))
+                        raise
+                    intf_sock = ifcache_entry.sock
                     if intf_sock:
-                        ifname = fd_to_ifname[fd]
+                        ifname = ifcache_entry.ifname
                         msg, saddr = intf_sock.recvfrom(1024)
+                        server_ip = ifcache_entry.ip
+                        if server_ip is None:
+                            logger.error("Received DHCP packet on {} with no IP address".format(ifname, saddr))
+                            continue
+                            
                         logger.debug("Received DHCP packet on {} from {}".format(ifname, saddr))
-                        (data, address) = process_dhcp_packet(ifname, serverip.get(ifname), msg)
+                        (data, address) = process_dhcp_packet(ifname, server_ip, msg)
                         if data is None or address is None:
                             logger.debug("No DHCP response sent for packet on {}".format(ifname))
                             continue
                         intf_sock.sendto(data, (address, 68))
-
-                    else:
-                        logger.debug("Received POLLIN event on fd={}, not in list".format(fd))
-    
-    # When should sql connection be closed?
-
 

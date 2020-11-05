@@ -43,7 +43,7 @@ class dtype(Enum):
     STATICRT = 6
 
 def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
-    logger.debug("Fetching Host conf for intf:{} mac:{}".format(ifname, mac))
+    logger.debug("Fetching Host conf for intf:%s mac:%s",ifname, mac)
     result = {}
 
     cursor = dhcp_db_conn.cursor()
@@ -58,7 +58,7 @@ def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
         try:
             datatype = dtype(datatype)
         except ValueError as err:
-            logger.error("Invalid datatype entry {} for opcode {} ".format(datatype, opcode))
+            logger.error("Invalid datatype entry %d for opcode %d ", datatype, opcode)
             cursor.close()
             continue   # Shouldn't remaining entries be processed for this client?
         if max_count == 1:                           ## Assumed that application handles insertion of attr values
@@ -71,7 +71,7 @@ def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
             elif datatype is dtype.STRING:
                 result[opcode] = value
             else:
-                logger.error("Invalid entry (datatype, maxcount):({}, {}) ".format(datatype, max_count))
+                logger.error("Invalid entry (datatype, maxcount):(%d, %d) ", datatype, max_count)
         else:
             if opcode not in result:
                 result[opcode] = []
@@ -80,7 +80,7 @@ def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
             elif datatype is dtype.STATICRT:
                 result[opcode].append(Staticrt(value))
             else:
-                logger.error("Invalid entry (datatype, maxcount):({}, {}) ".format(datatype, max_count))
+                logger.error("Invalid entry (datatype, maxcount):(%d, %d) ", datatype, max_count)
     cursor.close()
     return result
 

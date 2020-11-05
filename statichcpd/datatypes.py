@@ -26,7 +26,7 @@ class Staticrt():
         try:
             self.value = (IPv4Network(cidr), IPv4Address(gw))
         except ValueError as err:
-            logger.error("{}: Invalid route entry {}".format(err, val))
+            logger.error("%s: Invalid route entry %s", err, val)
     
     def __bytes__(self):        # Returns a byte string in accordance with RFC 3442 DHCP Option 121
         network, gateway = self.value
