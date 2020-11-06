@@ -12,6 +12,8 @@ from pathlib import Path
 
 if __name__ == "__main__":
 
+    config_file = '/etc/statichcpd/statichcpd.conf' # Default config file path
+
     argparser = ArgumentParser()
     argparser.add_argument('-v', '--verbose',
                         help="Enable verbose debug logging",
@@ -26,9 +28,10 @@ if __name__ == "__main__":
 
     namespace = argparser.parse_args()
     set_log_config(namespace)
-
+    if namespace.config_file is not None:
+        config_file = namespace.config_file
     config = configparser.ConfigParser()
-    config.read(namespace.config_file)
+    config.read(config_file)
     statichcpd_config = config['statichcpd'] 
     database_manager.init(statichcpd_config)
     dhcpserver.init(statichcpd_config)

@@ -28,8 +28,8 @@ max_lease_time = 0
 
 def init(config: SectionProxy):
     global default_lease_time, max_lease_time
-    default_lease_time = config['default_lease_time']
-    max_lease_time = config['max_lease_time']
+    default_lease_time = config.getint('default_lease_time')
+    max_lease_time = config.getint('max_lease_time')
 
 def mac_addr(address: bytes) -> str:
     return ':'.join('%02x' % compat_ord(b) for b in address)
