@@ -11,6 +11,7 @@ from typing import Dict, List, Any, Tuple, TypeVar
 import netifaces as ni
 from dpkt import dhcp
 import re
+from configparser import SectionProxy
 
 from .dhcp_packet_mgr import process_dhcp_packet
 from .database_manager import *
@@ -22,6 +23,11 @@ from .logmgr import logger
 any_nlmsg = TypeVar('any_nlmsg', ifinfmsg, ifaddrmsg)
 servername_pattern = ''
 server_regexobj = None
+
+def init(config: SectionProxy) -> None:
+    global server_regexobj, servername_pattern
+    servername_pattern = config['served_interface_regex']
+    server_regexobj = re.compile(servername_pattern)
 
 # An interface cache entry exists only for an interface whose state is UP 
 # OR has a valid IP address configured. At any point, if the interface state
@@ -234,7 +240,7 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         if ifcache_entry is not None:
             logger.debug("%s notif for %s IP %s", nl_event, ifname, ifaddr)
             ifcache_entry.ip = ifaddr 
-            if ifcache_entry.up is True:
+            if ifcache_entry.up:
                 activate_and_start_polling(poller_obj, ifcache_entry)  # In case of multiple addresses,activation will be no-op
         else:
             # Add a new intf cache entry and set the up state to True
@@ -253,14 +259,12 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         deactivate_and_stop_polling(poller_obj, ifcache_entry)
         ifcache_entry.ip = None
         # If state is also DOWN, remove the cache entry
-        if ifcache_entry.up is False:
+        if not ifcache_entry.up:
             ifcache.delete(ifcache_entry)
 
 def start_server():
-    global server_regexobj
 
     init_dhcp_db()
-    server_regexobj = re.compile(servername_pattern)
 
 # 1. Create an NL socket and bind
     nlsock = IPRoute()

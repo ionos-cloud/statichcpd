@@ -6,6 +6,7 @@ from typing import Tuple, List, Any, Dict, Optional
 import os
 from ipaddress import IPv4Address
 from enum import Enum
+from configparser import SectionProxy
 
 from .datatypes import *
 from .logmgr import logger
@@ -36,6 +37,10 @@ schema = [
 
 DHCP_IP_OPCODE = 200  
 DHCP_IPV6_OPCODE = 201
+
+def init(config: SectionProxy) -> None:
+    global dhcp_db_name
+    dhcp_db_name = config['dhcp_db_filename']
 
 class dtype(Enum):
     IPV4 = 1

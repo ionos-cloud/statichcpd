@@ -6,6 +6,7 @@ from dpkt.compat import compat_ord
 import struct
 from ipaddress import IPv4Address
 import socket
+from configparser import SectionProxy
 from typing import Any, List, Tuple, Optional
 
 from .datatypes import *
@@ -24,6 +25,11 @@ dhcp_type_to_str: Dict = {dhcp.DHCPDISCOVER : "DHCPDISCOVER",
 dhcppacket_type = dhcp.DHCP
 default_lease_time = 0
 max_lease_time = 0
+
+def init(config: SectionProxy):
+    global default_lease_time, max_lease_time
+    default_lease_time = config['default_lease_time']
+    max_lease_time = config['max_lease_time']
 
 def mac_addr(address: bytes) -> str:
     return ':'.join('%02x' % compat_ord(b) for b in address)
@@ -69,7 +75,6 @@ def fetch_destination_address(dhcp_obj: dhcp) -> Optional[IPv4Address]:
     except AddressValueError as err:
         logger.error("%s: Failed to fetch destination address for DHCP packet on %s", err, ifname)
         return None
-    print(addr)
     return addr
 
 def fetch_addr_lease_time(dhcp_obj: dhcp, opt_tuple: Tuple):

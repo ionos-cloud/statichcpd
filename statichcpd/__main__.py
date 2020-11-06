@@ -29,10 +29,8 @@ if __name__ == "__main__":
 
     config = configparser.ConfigParser()
     config.read(namespace.config_file)
-
-    database_manager.dhcp_db_name = config['statichcpd']['dhcp_db_filename']
-    dhcpserver.servername_pattern = config['statichcpd']['served_interface_regex']
-    dhcp_packet_mgr.default_lease_time = int(config['statichcpd']['default_lease_time'])
-    dhcp_packet_mgr.max_lease_time = int(config['statichcpd']['max_lease_time'])
-
+    statichcpd_config = config['statichcpd'] 
+    database_manager.init(statichcpd_config)
+    dhcpserver.init(statichcpd_config)
+    dhcp_packet_mgr.init(statichcpd_config)
     start_server()
