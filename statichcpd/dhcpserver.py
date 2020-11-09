@@ -268,7 +268,7 @@ def start_server():
             try:
                 idx = ipr.link_lookup(ifname=ifname)[0]
                 interface_ip = str(IPv4Address(ipr.get_addr(index=idx)[0].get_attr('IFA_ADDRESS')))
-            except AddressValueError:
+            except (AddressValueError, IndexError):
                 logger.error("No IP address configuration found on %s. Skipping poll registration", ifname)
                 interface_ip = None 
 
