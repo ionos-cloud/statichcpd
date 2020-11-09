@@ -8,7 +8,7 @@ from pyroute2.netlink.rtnl.ifaddrmsg import ifaddrmsg
 import socket
 from logging import Logger
 from typing import Dict, List, Any, Tuple, TypeVar
-import netifaces as ni
+from ipaddress import AddressValueError
 from dpkt import dhcp
 import re
 from configparser import SectionProxy
@@ -262,11 +262,13 @@ def start_server():
     for intf in nlsock.get_links():
         state = intf.IFLA_OPERSTATE.value
         ifname = intf.IFLA_IFNAME.value
+        ipr = IPRoute()
         if is_served_intf(ifname):
             # Check if there is an IP configured
             try:
-                interface_ip = ni.ifaddresses(ifname)[ni.AF_INET][0]['addr']
-            except KeyError:
+                idx = ipr.link_lookup(ifname=ifname)[0]
+                interface_ip = str(IPv4Address(ipr.get_addr(index=idx)[0].get_attr('IFA_ADDRESS')))
+            except AddressValueError:
                 logger.error("No IP address configuration found on %s. Skipping poll registration", ifname)
                 interface_ip = None 
 
