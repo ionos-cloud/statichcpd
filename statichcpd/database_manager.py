@@ -7,24 +7,23 @@ import os
 from ipaddress import IPv4Address
 from enum import Enum
 from configparser import SectionProxy
+import csv
 
 from .datatypes import *
 from .logmgr import logger
 
-dhcp_db_name = None
 dhcp_db_conn = None
 
 schema = [
-        """create table if not exists clients (
-           ifname text not null,
-           mac text not null,
-           constraint compkey_mac_if unique(ifname, mac));""",
         """create table if not exists valid_attributes(
-           name text,
            opcode int not null,
            max_count int not null,
            datatype int not null,
            constraint unique_opcode unique(opcode));""",
+        """create table if not exists clients (
+           ifname text not null,
+           mac text not null,
+           constraint compkey_mac_if unique(ifname, mac));""",
         """create table if not exists host_configuration_data (
            ifname text not null,
            mac text not null,
@@ -35,12 +34,11 @@ schema = [
            foreign key (attr_code) references valid_attributes(opcode) on delete restrict);"""
         ]
 
-DHCP_IP_OPCODE = 200  
-DHCP_IPV6_OPCODE = 201
+# Using IP(v4/v6) opcode value outside permitted
+# DHCP opcode range to avoid conflict
 
-def init(config: SectionProxy) -> None:
-    global dhcp_db_name
-    dhcp_db_name = config['dhcp_db_filename']
+DHCP_IP_OPCODE = 256
+DHCP_IPV6_OPCODE = 257
 
 class dtype(Enum):
     IPV4 = 1
@@ -49,6 +47,47 @@ class dtype(Enum):
     INT32 = 4
     STRING = 5
     STATICRT = 6
+
+def insert_data_from(csv_filename: str) -> None:
+    cursor = dhcp_db_conn.cursor()
+    with open (csv_filename, 'r') as f:
+        reader = csv.reader(f)
+        columns = next(reader)
+        query = 'replace into valid_attributes({0}) values ({1})'.format(','.join(columns), ','.join('?' * len(columns)))
+        for row in reader:
+            # Opcode can be an integer or dpkt.dhcp module optcode alias
+            try:
+                data = (str(getattr(dhcp, row[0])), row[1], str(eval("dtype." + row[2] + ".value")))
+            except:
+                data = (str(row[0]), row[1], str(eval("dtype." + row[2] + ".value")))
+
+            cursor.execute(query, data)
+    dhcp_db_conn.commit()
+
+def init(config: SectionProxy) -> None:
+    dhcp_db_name = config['dhcp_db_filename']
+    global dhcp_db_conn
+    dhcp_db_name = str(dhcp_db_name) if type(dhcp_db_name) is not str else dhcp_db_name
+    logger.debug("Connecting to %s", dhcp_db_name)
+    dhcp_db_conn = sqlite3.connect(dhcp_db_name)
+    if dhcp_db_conn is None:
+        raise Exception("Connecting to DHCP db {} failed".format(dhcp_db_name))
+
+    cursor = dhcp_db_conn.cursor()
+    for command in schema:
+        cursor.execute(command)
+    dhcp_db_conn.commit()
+    cursor.close()
+    logger.debug("Created config tables")
+
+    #Populate the valid_attributes table
+
+    # Insert default attributes
+    insert_data_from('default_attr.csv')
+
+    # Insert user defined attributes, if any
+    if 'additional_attributes_file' in config:
+        insert_data_from(config.get('additional_attributes_file'))
 
 def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
     logger.debug("Fetching Host conf for intf:%s mac:%s",ifname, mac)
@@ -83,7 +122,7 @@ def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
         else:
             if opcode not in result:
                 result[opcode] = []
-            if datatype is dtype.IPV4:               # Should this also be IPV4?
+            if datatype is dtype.IPV4:
                 result[opcode].append(IPv4Address(value))
             elif datatype is dtype.STATICRT:
                 result[opcode].append(Staticrt(value))
@@ -91,14 +130,4 @@ def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
                 logger.error("Invalid entry (datatype, maxcount):(%d, %d) ", datatype, max_count)
     cursor.close()
     return result
-
-def init_dhcp_db():
-    global dhcp_db_conn, dhcp_db_name
-    if dhcp_db_conn is None:
-        dhcp_db_name = str(dhcp_db_name) if type(dhcp_db_name) is not str else dhcp_db_name
-        print("Connecting to ", dhcp_db_name)
-        dhcp_db_conn = sqlite3.connect(dhcp_db_name)
-        if dhcp_db_conn is None:
-            raise Exception("Connecting to DHCP db {} failed".format(dhcp_db_name))
-
 

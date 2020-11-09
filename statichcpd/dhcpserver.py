@@ -21,13 +21,11 @@ from .logmgr import logger
 #  and remove the intf from poll if it's delete
 
 any_nlmsg = TypeVar('any_nlmsg', ifinfmsg, ifaddrmsg)
-servername_pattern = ''
 server_regexobj = None
 
 def init(config: SectionProxy) -> None:
-    global server_regexobj, servername_pattern
-    servername_pattern = config['served_interface_regex']
-    server_regexobj = re.compile(servername_pattern)
+    global server_regexobj
+    server_regexobj = re.compile(config['served_interface_regex'])
 
 # An interface cache entry exists only for an interface whose state is UP 
 # OR has a valid IP address configured. At any point, if the interface state
@@ -40,24 +38,6 @@ class InterfaceCacheEntry():
         self.ifname = ifname
         self.ip = None
         self.up = False
-        self.active = False
-
-    @property
-    def ip(self):
-        return self._ip
-
-    @ip.setter
-    def ip(self, val):
-        self._ip = val
-
-    @property
-    def up(self):
-        return self._up
-
-    @up.setter
-    def up(self, val):
-        if type(val) is bool:
-            self._up = val
 
 class InterfaceCache(object):
     def __init__(self):
@@ -72,7 +52,7 @@ class InterfaceCache(object):
 
     def delete(self, entry):
         logger.debug("Deleting cache entry for %s", entry.ifname)
-        if entry.active: # Access using fd will be availabe only after activation
+        if entry.fd is not None: # Access using fd will be availabe only after activation
             del self._by_fd[entry.fd]
         del self._by_ifname[entry.ifname]
 
@@ -85,7 +65,6 @@ class InterfaceCache(object):
     def activate(self, entry, sock):
         entry.sock = sock
         entry.fd =  sock.fileno()
-        entry.active = True
         self._by_fd[entry.fd] = entry
         self._by_ifname[entry.ifname] =  entry
 
@@ -94,7 +73,6 @@ class InterfaceCache(object):
             entry.sock.close()
         entry.sock = None
         entry.fd =  None
-        entry.active = False
         self._by_fd[entry.fd] = entry
         self._by_ifname[entry.ifname] =  entry
 
@@ -138,7 +116,7 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
     ifname = ifcache_entry.ifname
 
     # Skip for already activated interface
-    if ifcache_entry.active:
+    if ifcache_entry.fd is not None:
         logger.debug("Interface %s is already active. Skipping..", ifname)
         return
 
@@ -168,7 +146,7 @@ def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheE
     ifname = ifcache_entry.ifname
 
     # Skip already deactivated entries
-    if ifcache_entry is None or not ifcache_entry.active:
+    if ifcache_entry is None or ifcache_entry.fd is None:
 	       logger.debug("Ignoring non-registered intf: %s", ifname)
 	       return
 
@@ -263,8 +241,6 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
             ifcache.delete(ifcache_entry)
 
 def start_server():
-
-    init_dhcp_db()
 
 # 1. Create an NL socket and bind
     nlsock = IPRoute()

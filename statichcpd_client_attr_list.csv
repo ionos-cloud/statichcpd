@@ -1,0 +1,3 @@
+opcode,max_count,datatype
+DHCP_OPT_NNTPSERVER,100,IPV4
+DHCP_OPT_NBNS,100,IPV4

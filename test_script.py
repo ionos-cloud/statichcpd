@@ -21,7 +21,7 @@ valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": (dhcp.DHCP_OPT_NETMAS
 
 valid_multi_valued_attr: Dict[str, int] = {"Router": (dhcp.DHCP_OPT_ROUTER, dtype.IPV4.value),
                                            "Time Server": (dhcp.DHCP_OPT_TIMESERVER, dtype.IPV4.value),
-                                           "Name Server": (dhcp. DHCP_OPT_NAMESERVER, dtype.IPV4.value),
+                                           "Name Server": (dhcp.DHCP_OPT_NAMESERVER, dtype.IPV4.value),
                                            "Log Server": (dhcp.DHCP_OPT_LOGSERV, dtype.IPV4.value),
                                            "Domain Server": (dhcp.DHCP_OPT_DNS_SVRS, dtype.IPV4.value),
                                            "Static Route": (dhcp.DHCP_OPT_STATICROUTE, dtype.STATICRT.value),
@@ -44,19 +44,7 @@ def init_client_table(mac_list: List[str], ifname_list: List[str]) -> None:
         mac  = mac_list[i]
         ifname = ifname_list[i]
         cursor = conn.cursor()
-        cursor.execute(" insert into clients (ifname, mac) values (?,?)", (ifname, mac))
-        conn.commit()
-        cursor.close()
-
-
-def init_valid_attributes_table():
-    for attr in valid_single_valued_attr:
-        cursor = conn.cursor()   
-        cursor.execute(" insert into valid_attributes (name, opcode, max_count, datatype) values (?, ?, 1, ?)", 
-                                     (attr, valid_single_valued_attr[attr][0],valid_single_valued_attr[attr][1])) 
-    for attr in valid_multi_valued_attr:
-        cursor.execute(" insert into valid_attributes (name, opcode, max_count, datatype) values (?, ?, 100, ?)", 
-                                     (attr, valid_multi_valued_attr[attr][0], valid_multi_valued_attr[attr][1])) 
+        cursor.execute(" replace into clients (ifname, mac) values (?,?)", (ifname, mac))
     conn.commit()
     cursor.close()
 
@@ -67,7 +55,7 @@ def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists
         attr_list = attr_lists[i]
         for attr in attr_list:
             cursor = conn.cursor()
-            cursor.execute(""" insert into host_configuration_data
+            cursor.execute(""" replace into host_configuration_data
                                        (ifname, mac, attr_code, attr_val) values
                                        (?, ?, ?, ?)""", (ifname, mac, attr[0], attr[1]))
         conn.commit()
@@ -82,9 +70,9 @@ def create_dhcp_database(mac: List[str], ifname: List[str], attr_lists: List[Lis
     for command in schema:
         print("Executing.. ", command)
         cursor.execute(command)
+    conn.commit()
     cursor.close()
     init_client_table(mac, ifname)
-    init_valid_attributes_table()
     init_host_conf_table(mac, ifname, attr_lists)
 
 server_if_list  = ["veth0dummy0", "veth0dummy0"]
@@ -102,6 +90,11 @@ attr_lists = [[(valid_single_valued_attr["IPv4"][0], "20.0.0.1"),
               (valid_single_valued_attr["Hostname"][0], "myhost"),
               (valid_multi_valued_attr["Domain Server"][0], '192.168.144.56'),
               (valid_multi_valued_attr["Name Server"][0],  '192.168.144.57'),
+              (dhcp.DHCP_OPT_NNTPSERVER,  '192.168.144.100'),
+              (dhcp.DHCP_OPT_NNTPSERVER,  '192.168.144.101'),
+              (dhcp.DHCP_OPT_NBNS, '192.168.33.33'),
+              (dhcp.DHCP_OPT_NBNS, '192.168.33.34'),
+              (dhcp.DHCP_OPT_NBNS, '192.168.33.35'),
               (valid_single_valued_attr["NETBIOS Scope"][0], 'nbscope'),
               (valid_multi_valued_attr["Classless Static Route"][0], '30.1.0.0/16,30.1.0.1'),
               (valid_multi_valued_attr["Classless Static Route"][0], '20.10.10.0/24,20.10.10.1')],
