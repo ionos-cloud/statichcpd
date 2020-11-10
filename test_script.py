@@ -65,7 +65,7 @@ def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists
 def create_dhcp_database(mac: List[str], ifname: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:
     global conn
     if conn is None:
-        conn = sqlite3.connect('Static_DHCP_DB.db')
+        conn = sqlite3.connect('/var/lib/statichcpd/Static_DHCP_DB.db')
     cursor = conn.cursor()
     for command in schema:
         print("Executing.. ", command)
