@@ -14,7 +14,7 @@ setup(
     author='Reshma Sreekumar',
     author_email='reshma.sreekumar@cloud.ionos.com',
     packages=['statichcpd'],
-    install_requires=['dpkt>>1.9.2', 'pyroute2>=0.5.6~'],
+    install_requires=['dpkt', 'pyroute2'],
     license='MIT',
     long_description=open('README.txt').read(),
 )

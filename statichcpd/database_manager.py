@@ -83,7 +83,7 @@ def init(config: SectionProxy) -> None:
     #Populate the valid_attributes table
 
     # Insert default attributes
-    insert_data_from('default_attr.csv')
+    insert_data_from('/usr/share/statichcpd/default_attr.csv')
 
     # Insert user defined attributes, if any
     if 'additional_attributes_file' in config:
