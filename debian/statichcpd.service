@@ -1,0 +1,18 @@
+[Unit]
+Description=Static Host Configuration Protocol Daemon
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/statichcpd
+PrivateTmp=yes
+
+ExecStart=/usr/bin/python3 -m statichcpd $OPTIONS
+KillSignal=INT
+PIDFile=/run/statichcpd.pid
+
+StandardOutput=journal
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target
