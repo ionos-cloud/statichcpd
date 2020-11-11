@@ -47,11 +47,11 @@ class InterfaceCache(object):
     def add(self, ifname):
         entry = InterfaceCacheEntry(ifname)
         self._by_ifname[ifname] = entry
-        logger.debug("Created a new cache entry for %s ", ifname)
+        logger.info("Created a new cache entry for %s ", ifname)
         return entry
 
     def delete(self, entry):
-        logger.debug("Deleting cache entry for %s", entry.ifname)
+        logger.info("Deleting cache entry for %s", entry.ifname)
         if entry.fd is not None: # Access using fd will be availabe only after activation
             del self._by_fd[entry.fd]
         del self._by_ifname[entry.ifname]
@@ -117,7 +117,7 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
 
     # Skip for already activated interface
     if ifcache_entry.fd is not None:
-        logger.debug("Interface %s is already active. Skipping..", ifname)
+        logger.info("Interface %s is already active. Skipping..", ifname)
         return
 
     # Create and bind a socket
@@ -130,10 +130,10 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
     ifcache.activate(ifcache_entry, intf_sock)
  
     # Register with poller object
-    logger.debug("Registering fd: %d with poll", intf_sock.fileno())
+    logger.info("Registering fd: %d with poll", intf_sock.fileno())
     try:
         poller_obj.register(intf_sock.fileno())
-        logger.debug("Polling on interface %s", ifname)
+        logger.info("Polling on interface %s", ifname)
     except AttributeError as err:
         logger.error("%s: Registering with poll failed for %s", err, ifname)
         # Cleanup the socket binding and deativate the cache entry: 
@@ -147,10 +147,10 @@ def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheE
 
     # Skip already deactivated entries
     if ifcache_entry is None or ifcache_entry.fd is None:
-	       logger.debug("Ignoring non-registered intf: %s", ifname)
+	       logger.info("Ignoring non-registered intf: %s", ifname)
 	       return
 
-    logger.debug("Deregistering fd: %d", ifcache_entry.fd)
+    logger.info("Deregistering fd: %d", ifcache_entry.fd)
     try:
         poller_obj.unregister(ifcache_entry.fd)
     except KeyError as err:

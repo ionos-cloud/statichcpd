@@ -7,9 +7,9 @@ Type=simple
 EnvironmentFile=-/etc/default/statichcpd
 PrivateTmp=yes
 
-ExecStart=test x$NAMESPACE = x \
+ExecStart=sh -c "test x$NAMESPACE = x \
         && /usr/bin/python3 -m statichcpd $OPTIONS \
-        || ip netns exec $NAMESPACE /usr/bin/python3 -m statichcpd $OPTIONS
+        || ip netns exec $NAMESPACE /usr/bin/python3 -m statichcpd $OPTIONS"
 KillSignal=INT
 PIDFile=/run/statichcpd.pid
 

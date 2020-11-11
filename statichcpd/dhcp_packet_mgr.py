@@ -92,7 +92,7 @@ def append_mandatory_options(dhcp_obj: dhcp, opt_tuple: Tuple, option: str, serv
     opt_list = list(opt_tuple)
     lease_time = fetch_addr_lease_time(dhcp_obj, opt_tuple) 
     opt_list.extend([(dhcp.DHCP_OPT_MSGTYPE, bytes([option])),
-                     #(dhcp.DHCP_OPT_LEASE_SEC, (lease_time).to_bytes(4, 'big')),
+                     (dhcp.DHCP_OPT_LEASE_SEC, (lease_time).to_bytes(4, 'big')),
                      (dhcp.DHCP_OPT_SERVER_ID, server_id),
                      (255, b'')])
    
