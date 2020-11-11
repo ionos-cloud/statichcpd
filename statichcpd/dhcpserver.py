@@ -101,8 +101,8 @@ def add_sock_binding(ifname: str) -> Optional[socket.socket]:
 
     try:
         intf_sock.bind(('', 67))
-    except OSError:
-        logger.error("Failed to bind to the socket for %s", ifname)
+    except OSError as err:
+        logger.error("%s Failed to bind to the socket for %s", err, ifname)
         intf_sock.close()   # No entry is added to internal datastructs at this point and not registered with poll
         return None
 
