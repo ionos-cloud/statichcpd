@@ -41,7 +41,7 @@ def fetch_dhcp_opt(dhcp_obj: dhcp, opt: int) -> Any:
     logger.debug("Optcode %d not set in %s from %s", 
                  opt, dhcp_type_to_str[fetch_dhcp_type(dhcp_obj)],
                  mac_addr(dhcp_obj.chaddr))
-    return -1
+    return None
 
 def fetch_dhcp_type(dhcp_obj: dhcp) -> int:
     data = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_MSGTYPE)
@@ -167,12 +167,12 @@ def construct_dhcp_nak(dhcp_obj: dhcp, ifname: str, server_id: str,
     return construct_dhcp_packet(dhcp_obj, requested_ip, opt_list)
 
 def construct_dhcp_ack(dhcp_obj: dhcp, ifname: str, server_id: str,
-                       requested_ip: str, request_list_opt: List[int], 
+                       client_ip: str, request_list_opt: List[int], 
                        host_conf_data: Dict[str, str]) -> Optional[dhcppacket_type]:
     logger.debug("Server IP for ACK: %s", server_id)
     opt_list = construct_dhcp_opt_list(request_list_opt, mac_addr(dhcp_obj.chaddr), ifname, host_conf_data)
     opt_list = append_mandatory_options(dhcp_obj, opt_list, dhcp.DHCPACK, server_id)
-    return construct_dhcp_packet(dhcp_obj, requested_ip, opt_list)
+    return construct_dhcp_packet(dhcp_obj, client_ip, opt_list)
 
 # In case of DHCP Discover
 # Lookup in the SQL DB for an appropriate data
@@ -205,10 +205,42 @@ def process_dhcp_discover(dhcp_obj: dhcp, server_id: str, ifname: str) -> Option
 # Lookup in the SQL DB for the appropriate data and check if that matches the requested IP
 # Compose DHCP Accept message and send back
 
+class state(Enum):
+    SELECTING_INIT_REBOOT = 1
+    RENEWING_REBINDING = 2
+    INVALID = 3
+
+# Valid client states:
+# SELECTING : ciaddr = 0 , valid requested_ip, valid server_id 
+# INIT-REBOOT : ciaddr = 0, valid requested_ip, no server_id
+# RENEWING : valid ciaddr, no requested ip, no server_id
+# REBINDING : valid ciaddr, no requested ip, no server_id
+
+def fetch_client_state(server_id: str, ciaddr: str, requested_ip: str) -> state:
+    try:
+         ciaddr = IPv4Address(ciaddr)
+    except AddressValueError:
+         return state.INVALID
+         
+    if not ciaddr.is_unspecified:
+        if not requested_ip and not server_id:
+            return state.RENEWING_REBINDING
+        else:
+            return state.INVALID
+    try:
+        if IPv4Address(requested_ip):
+            return state.SELECTING_INIT_REBOOT
+    except:
+        return state.INVALID
+        
 def process_dhcp_request(dhcp_obj: dhcp, server_id: str, ifname: str) -> Optional[Tuple[bytes, IPv4Address]]:
-    #Match XID with pending requests??
     client_mac =  mac_addr(dhcp_obj.chaddr)
+    server_id_in_request = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_SERVER_ID)
+    ciaddr_in_request = dhcp_obj.ciaddr
     requested_ip = fetch_dhcp_req_ip(dhcp_obj)
+    client_state = fetch_client_state(server_id_in_request, ciaddr_in_request, requested_ip)
+    logger.debug("Based on DHCP Request opts, client %s is in %s state", 
+                              client_mac, client_state.name) 
     host_conf_data = fetch_host_conf_data(ifname, client_mac)
     
     if not host_conf_data:
@@ -220,29 +252,42 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: str, ifname: str) -> Optiona
         offer_ip = host_conf_data[DHCP_IP_OPCODE]
 
     # Validate the requested IP
-    if offer_ip:
-        logger.debug("Constructing DHCP OFFER with IP: %s", offer_ip)
-        is_valid_request = (requested_ip and
+    if client_state is state.INVALID:
+        logger.debug("DHCP-Request: Invalid packet received from %s with server_id: %s ciaddr: %s requested_ip: %s",
+                       client_mac, server_id_in_request, ciaddr_in_request, requested_ip)
+        is_valid_request = False
+    
+    else:
+        if client_state is state.SELECTING_INIT_REBOOT:
+            if not offer_ip:
+                logger.debug("DHCP-Request: No offer IP found for client %s on intf %s with request IP %s",
+                              client_mac, ifname, requested_ip)
+                is_valid_request = False
+            else:
+                is_valid_request = (requested_ip and
                             not requested_ip.is_unspecified and 
                             not offer_ip.is_unspecified and 
                             offer_ip == requested_ip)
-    else:
-        # If there is no offer IP and if the requested IP field is also empty, 
-        # should the ACK be sent back with remaining data?
-        is_valid_request = requested_ip.is_unspecified
-
+        else:
+            # If the client is in RENEWING or REBINDING state, request IP is not filled
+            # So, respond back with available data
+            is_valid_request = True
+            if not offer_ip:
+                logger.debug("DHCP-Request: No offer IP found for client %s in %s state on intf %s",
+                             client_mac, client_state.name, ifname)
+                is_valid_request = False
+    
     dhcp_packet = None
 
     if is_valid_request:
-        logger.debug("Constructing DHCP Accept with IP: %s", requested_ip)
+        logger.debug("Constructing DHCP Accept with IP: %s", offer_ip)
         request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
-        dhcp_packet = construct_dhcp_ack(dhcp_obj, ifname, server_id, requested_ip, request_list_opt, host_conf_data)
-        #send_packet(dhcp_ack, ifname, dhcp_obj)
+        # In case of valid request, it is safer to construct reply packet with offer IP, than request IP
+        dhcp_packet = construct_dhcp_ack(dhcp_obj, ifname, server_id, offer_ip, request_list_opt, host_conf_data)
     else:
         request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
         logger.debug("Requested IP (%s) doesn't match available IP (%s)", requested_ip, offer_ip)
         dhcp_packet = construct_dhcp_nak(dhcp_obj, ifname, server_id, requested_ip, request_list_opt, host_conf_data)
-        #send_packet(dhcp_nak, ifname, dhcp_obj)
 
     if dhcp_packet is None:
         logger.error("Failed to construct DHCP response packet on interface %s", ifname)
