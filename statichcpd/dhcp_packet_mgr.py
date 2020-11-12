@@ -50,9 +50,11 @@ def fetch_dhcp_type(dhcp_obj: dhcp) -> int:
 def fetch_dhcp_req_ip(dhcp_obj: dhcp) -> Optional[str]:
     data = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_REQ_IP)
     try:
+        if data is None:
+             return None
         return IPv4Address(data)
     except Exception as err:
-        logger.error("%s: Failed to fetch requested IP",err)
+        logger.debug("%s: Failed to fetch requested IP",err)
         return None
    
 # If giaddr != 0, send to giaddr
