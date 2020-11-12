@@ -132,7 +132,7 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
     # Register with poller object
     logger.info("Registering fd: %d with poll", intf_sock.fileno())
     try:
-        poller_obj.register(intf_sock.fileno())
+        poller_obj.register(intf_sock.fileno(), POLLIN)
         logger.info("Polling on interface %s", ifname)
     except AttributeError as err:
         logger.error("%s: Registering with poll failed for %s", err, ifname)
@@ -252,7 +252,7 @@ def start_server():
 # 2. Poll on the NL socket
 
     poller_obj = poll()
-    poller_obj.register(nlsock)
+    poller_obj.register(nlsock, POLLIN)
     logger.debug("Registered Netlink socket for polling...")
 
 
