@@ -8,7 +8,6 @@ from ipaddress import IPv4Address
 import socket
 from configparser import SectionProxy
 from typing import Any, List, Tuple, Optional
-import binascii
 
 from .datatypes import *
 from .database_manager import *
@@ -300,7 +299,7 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: str, ifname: str) -> Optiona
     return (data, addr)
 
 def build_frame(dhcp_data: bytes, client_mac: str, dest_ip: str, 
-                src_ip: str, ifname: str, server_mac: str) -> bytes:
+                src_ip: str, ifname: str, server_mac: bytes) -> bytes:
     dh = dpkt.dhcp.DHCP(dhcp_data)
     udp = dpkt.udp.UDP(sport=67, dport=68, data=bytes(dh))
     udp.ulen = len(udp)
@@ -310,7 +309,7 @@ def build_frame(dhcp_data: bytes, client_mac: str, dest_ip: str,
                     p=dpkt.ip.IP_PROTO_UDP,
                     data=udp)
     ip.len = len(ip)
-    eth = dpkt.ethernet.Ethernet(src=binascii.unhexlify(server_mac.replace(':', '')),
+    eth = dpkt.ethernet.Ethernet(src = server_mac,
                                  dst=client_mac,
                                  type=0x0800,
                                  data = bytes(ip))
@@ -321,7 +320,7 @@ def build_frame(dhcp_data: bytes, client_mac: str, dest_ip: str,
 # If there is a new msg in any of the dhcp intfs, process the data  (Incomplete)
 
 def process_dhcp_packet(ifname: str, server_addr: str, client_mac: str, 
-                        dhcp_obj: bytes, server_mac: str) -> Optional[bytes]:
+                        dhcp_obj: bytes, server_mac: bytes) -> Optional[bytes]:
 
     dhcp_type = fetch_dhcp_type(dhcp_obj)
     logger.debug("Received DHCP packet on %s of type %s", ifname, dhcp_type_to_str[dhcp_type])
