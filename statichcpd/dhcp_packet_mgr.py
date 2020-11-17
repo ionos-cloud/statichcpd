@@ -9,7 +9,6 @@ import socket
 from configparser import SectionProxy
 from typing import Any, List, Tuple, Optional
 import binascii
-import psutil
 
 from .datatypes import *
 from .database_manager import *
@@ -300,16 +299,8 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: str, ifname: str) -> Optiona
     addr = fetch_destination_address(dhcp_obj)
     return (data, addr)
 
-def get_mac_address(ifname: str) -> Optional[str]:
-    nics = psutil.net_if_addrs()
-    if ifname in nics:
-        nic = nics[ifname]
-        for i in nic:
-            if i.family == psutil.AF_LINK:
-                return i.address
-    return None
-
-def build_frame(dhcp_data: bytes, src_mac: str, dest_ip: str, src_ip: str, ifname: str) -> bytes:
+def build_frame(dhcp_data: bytes, client_mac: str, dest_ip: str, 
+                src_ip: str, ifname: str, server_mac: str) -> bytes:
     dh = dpkt.dhcp.DHCP(dhcp_data)
     udp = dpkt.udp.UDP(sport=67, dport=68, data=bytes(dh))
     udp.ulen = len(udp)
@@ -319,12 +310,8 @@ def build_frame(dhcp_data: bytes, src_mac: str, dest_ip: str, src_ip: str, ifnam
                     p=dpkt.ip.IP_PROTO_UDP,
                     data=udp)
     ip.len = len(ip)
-    eth_mac = get_mac_address(ifname)
-    if eth_mac is None:
-        logger.error("Failed to fetch mac address for intf %s", ifname)
-        logger.error("Not constructing response packet to client %s", mac_addr(src_mac))
-    eth = dpkt.ethernet.Ethernet(src=binascii.unhexlify(eth_mac.replace(':', '')),
-                                 dst=src_mac,
+    eth = dpkt.ethernet.Ethernet(src=binascii.unhexlify(server_mac.replace(':', '')),
+                                 dst=client_mac,
                                  type=0x0800,
                                  data = bytes(ip))
     return bytes(eth)
@@ -333,8 +320,8 @@ def build_frame(dhcp_data: bytes, src_mac: str, dest_ip: str, src_ip: str, ifnam
 
 # If there is a new msg in any of the dhcp intfs, process the data  (Incomplete)
 
-def process_dhcp_packet(ifname: str, server_addr: str, src_mac: str, 
-                        dhcp_obj: bytes) -> Optional[bytes]:
+def process_dhcp_packet(ifname: str, server_addr: str, client_mac: str, 
+                        dhcp_obj: bytes, server_mac: str) -> Optional[bytes]:
 
     dhcp_type = fetch_dhcp_type(dhcp_obj)
     logger.debug("Received DHCP packet on %s of type %s", ifname, dhcp_type_to_str[dhcp_type])
@@ -356,5 +343,5 @@ def process_dhcp_packet(ifname: str, server_addr: str, src_mac: str,
     if dhcp_pkt is None or address is None:
         return None
 
-    return build_frame(dhcp_pkt, src_mac, address, server_id, ifname)
+    return build_frame(dhcp_pkt, client_mac, address, server_id, ifname, server_mac)
 

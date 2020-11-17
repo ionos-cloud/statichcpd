@@ -17,6 +17,7 @@ import dpkt
 from dpkt.compat import compat_ord
 from ctypes import create_string_buffer, addressof
 from struct import pack
+import psutil
 
 from .dhcp_packet_mgr import process_dhcp_packet
 from .database_manager import *
@@ -32,6 +33,15 @@ def init(config: SectionProxy) -> None:
     global server_regexobj
     server_regexobj = re.compile(config['served_interface_regex'])
 
+def get_mac_address(ifname: str) -> Optional[str]:
+    nics = psutil.net_if_addrs()
+    if ifname in nics:
+        nic = nics[ifname]
+        for i in nic:
+            if i.family == psutil.AF_LINK:
+                return i.address
+    return None
+
 # An interface cache entry exists only for an interface whose state is UP 
 # OR has a valid IP address configured. At any point, if the interface state
 # becomes down and IP is also deleted, the entry will get erased
@@ -42,6 +52,7 @@ class InterfaceCacheEntry():
         self.sock = None
         self.ifname = ifname
         self.ip = None
+        self.mac = get_mac_address(ifname) 
         self.up = False
 
 class InterfaceCache(object):
@@ -368,7 +379,7 @@ def start_server():
                             
                         logger.debug("Received DHCP packet on %s from %s", ifname, 
                                       ':'.join('%02x' % compat_ord(b) for b in eth.src))
-                        dhcp_frame = process_dhcp_packet(ifname, server_ip, eth.src, dh)
+                        dhcp_frame = process_dhcp_packet(ifname, server_ip, eth.src, dh, ifcache_entry.mac)
                         if dhcp_frame is None:
                             logger.debug("No DHCP response sent for packet on %s", ifname)
                             continue
