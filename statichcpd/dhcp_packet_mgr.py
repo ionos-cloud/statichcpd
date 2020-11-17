@@ -8,6 +8,8 @@ from ipaddress import IPv4Address
 import socket
 from configparser import SectionProxy
 from typing import Any, List, Tuple, Optional
+import binascii
+import psutil
 
 from .datatypes import *
 from .database_manager import *
@@ -50,11 +52,11 @@ def fetch_dhcp_type(dhcp_obj: dhcp) -> int:
 def fetch_dhcp_req_ip(dhcp_obj: dhcp) -> Optional[str]:
     data = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_REQ_IP)
     try:
-        if data is None:
-             return None
-        return IPv4Address(data)
+        return None if data is None else IPv4Address(data)
     except Exception as err:
-        logger.debug("%s: Failed to fetch requested IP",err)
+        logger.debug("%s: Failed to parse requested IP (%s) for %s packet from %s",
+                        err, data, dhcp_type_to_str[fetch_dhcp_type(dhcp_obj)],
+                        mac_addr(dhcp_obj.chaddr))
         return None
    
 # If giaddr != 0, send to giaddr
@@ -72,14 +74,13 @@ def fetch_destination_address(dhcp_obj: dhcp) -> Optional[IPv4Address]:
             yiaddr = IPv4Address(dhcp_obj.yiaddr)
             is_broadcast = dhcp_obj.flags & (1 << 0) 
             if is_broadcast or yiaddr.is_unspecified:
-                logger.debug("Broadcasting packet...")
                 addr = '255.255.255.255'
             else:
                 addr = str(yiaddr)
-                logger.debug("Unicasting the packet to %s ", addr)
     except AddressValueError as err:
         logger.error("%s: Failed to fetch destination address for DHCP packet on %s", err, ifname)
         return None
+    logger.debug("Destination IP for DHCP response: %s ", addr)
     return addr
 
 def fetch_addr_lease_time(dhcp_obj: dhcp, opt_tuple: Tuple):
@@ -110,7 +111,7 @@ def append_mandatory_options(dhcp_obj: dhcp, opt_tuple: Tuple, option: str, serv
 def construct_dhcp_opt_list(request_list_opt: List[int], mac: str, 
                             ifname: str, host_conf_data: Dict[str, str]) -> Tuple:
     opt_list = []
-    if request_list_opt ==  -1:
+    if request_list_opt ==  None:
         logger.debug("No parameter request list")
         return tuple(opt_list)
     for opcode in request_list_opt:
@@ -299,12 +300,42 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: str, ifname: str) -> Optiona
     addr = fetch_destination_address(dhcp_obj)
     return (data, addr)
 
+def get_mac_address(ifname: str) -> Optional[str]:
+    nics = psutil.net_if_addrs()
+    if ifname in nics:
+        nic = nics[ifname]
+        for i in nic:
+            if i.family == psutil.AF_LINK:
+                return i.address
+    return None
+
+def build_frame(dhcp_data: bytes, src_mac: str, dest_ip: str, src_ip: str, ifname: str) -> bytes:
+    dh = dpkt.dhcp.DHCP(dhcp_data)
+    udp = dpkt.udp.UDP(sport=67, dport=68, data=bytes(dh))
+    udp.ulen = len(udp)
+    ip = dpkt.ip.IP(dst=IPv4Address(dest_ip).packed,
+                    src=IPv4Address(src_ip).packed, #Alter this to support intf with multiple server ID
+                    ttl=64,
+                    p=dpkt.ip.IP_PROTO_UDP,
+                    data=udp)
+    ip.len = len(ip)
+    eth_mac = get_mac_address(ifname)
+    if eth_mac is None:
+        logger.error("Failed to fetch mac address for intf %s", ifname)
+        logger.error("Not constructing response packet to client %s", mac_addr(src_mac))
+    eth = dpkt.ethernet.Ethernet(src=binascii.unhexlify(eth_mac.replace(':', '')),
+                                 dst=src_mac,
+                                 type=0x0800,
+                                 data = bytes(ip))
+    return bytes(eth)
+
+
 
 # If there is a new msg in any of the dhcp intfs, process the data  (Incomplete)
 
-def process_dhcp_packet(ifname: str, server_addr: str, msg: bytes) -> Optional[Tuple[bytes, IPv4Address]]:
+def process_dhcp_packet(ifname: str, server_addr: str, src_mac: str, 
+                        dhcp_obj: bytes) -> Optional[bytes]:
 
-    dhcp_obj = dpkt.dhcp.DHCP(msg)
     dhcp_type = fetch_dhcp_type(dhcp_obj)
     logger.debug("Received DHCP packet on %s of type %s", ifname, dhcp_type_to_str[dhcp_type])
 
@@ -312,14 +343,18 @@ def process_dhcp_packet(ifname: str, server_addr: str, msg: bytes) -> Optional[T
         server_id = socket.inet_aton(server_addr)
     except ValueError as err:
         logger.error("Invalid IP address for %s while processing DHCP packet", ifname)
-        return (None, None)
+        return None
 
     if (dhcp_type == dhcp.DHCPDISCOVER):
-        return process_dhcp_discover(dhcp_obj, server_id, ifname)
+        dhcp_pkt, address = process_dhcp_discover(dhcp_obj, server_id, ifname)
     elif (dhcp_type == dhcp.DHCPREQUEST):
-        return process_dhcp_request(dhcp_obj, server_id, ifname)
+        dhcp_pkt, address = process_dhcp_request(dhcp_obj, server_id, ifname)
     else:
         # Handle other packet types!!
         logger.debug("Unexpected DHCP packet type to server: %s", dhcp_type_to_str[dhcp_type])
-    return (None, None)
+        dhcp_pkt, address = (None, None)
+    if dhcp_pkt is None or address is None:
+        return None
+
+    return build_frame(dhcp_pkt, src_mac, address, server_id, ifname)
 
