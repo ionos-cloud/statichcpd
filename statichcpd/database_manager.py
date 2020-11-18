@@ -39,6 +39,7 @@ schema = [
 
 DHCP_IP_OPCODE = 256
 DHCP_IPV6_OPCODE = 257
+DHCP_NON_DEFAULT_SERVERID = 258
 
 class dtype(Enum):
     IPV4 = 1
