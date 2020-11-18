@@ -41,26 +41,30 @@ def getHwAddr(ifname: str) -> str:
 
 
 def init_client_table(mac_list: List[str], ifname_list: List[str]) -> None:
+    cursor = conn.cursor()
+    cursor.execute('''delete from clients;''')
+    conn.commit()
     for i in range(len(mac_list)):
         mac  = mac_list[i]
         ifname = ifname_list[i]
-        cursor = conn.cursor()
         cursor.execute(" replace into clients (ifname, mac) values (?,?)", (ifname, mac))
     conn.commit()
     cursor.close()
 
 def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:
+    cursor = conn.cursor()
+    cursor.execute('''delete from host_configuration_data;''')
+    conn.commit()
     for i in range(len(mac_list)):
         mac = mac_list[i]
         ifname = ifname_list[i]
         attr_list = attr_lists[i]
         for attr in attr_list:
-            cursor = conn.cursor()
             cursor.execute(""" replace into host_configuration_data
                                        (ifname, mac, attr_code, attr_val) values
                                        (?, ?, ?, ?)""", (ifname, mac, attr[0], attr[1]))
         conn.commit()
-        cursor.close()
+    cursor.close()
 
 
 def create_dhcp_database(mac: List[str], ifname: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:

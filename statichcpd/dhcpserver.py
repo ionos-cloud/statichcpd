@@ -17,6 +17,8 @@ import dpkt
 from dpkt.compat import compat_ord
 from ctypes import create_string_buffer, addressof
 from struct import pack
+import psutil
+import binascii
 
 from .dhcp_packet_mgr import process_dhcp_packet
 from .database_manager import *
@@ -32,6 +34,15 @@ def init(config: SectionProxy) -> None:
     global server_regexobj
     server_regexobj = re.compile(config['served_interface_regex'])
 
+def get_mac_address(ifname: str) -> Optional[str]:
+    nics = psutil.net_if_addrs()
+    if ifname in nics:
+        nic = nics[ifname]
+        for i in nic:
+            if i.family == psutil.AF_LINK:
+                return i.address
+    return None
+
 # An interface cache entry exists only for an interface whose state is UP 
 # OR has a valid IP address configured. At any point, if the interface state
 # becomes down and IP is also deleted, the entry will get erased
@@ -42,6 +53,7 @@ class InterfaceCacheEntry():
         self.sock = None
         self.ifname = ifname
         self.ip = None
+        self.mac = None
         self.up = False
 
 class InterfaceCache(object):
@@ -211,30 +223,24 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
     if nl_event == 'RTM_NEWLINK':
         ifname = nlmsg.IFLA_IFNAME.value
         state = nlmsg.IFLA_OPERSTATE.value
+        if_mac = nlmsg.IFLA_ADDRESS.value
+        print("For intf ", ifname, "set if_mac to ", if_mac)
         if not is_served_intf(ifname):
             return
-        
+        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
+        if ifcache_entry is None:
+            ifcache_entry = ifcache.add(ifname)
+        ifcache_entry.mac = if_mac
+       
         if state == 'LOWERLAYERDOWN' or state == 'DOWN':
             logger.debug("State change to DOWN for %s ", ifname)
-            ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
-            if ifcache_entry is None:
-                return
-
             # When the state is down, deactivate and stop polling
             deactivate_and_stop_polling(poller_obj, ifcache_entry)
             ifcache_entry.up = False
-
-            # If the IP address is also None, remove the cache entry
-            if ifcache_entry.ip is None:
-                ifcache.delete(ifcache_entry)
             return
 
         # If the state is up, start polling
         logger.debug("State change to UP for %s ", ifname)
-        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
-        if ifcache_entry is None:
-            # Add a new intf cache entry 
-            ifcache_entry = ifcache.add(ifname)
         # Set up to True and start polling
         ifcache_entry.up = True
         activate_and_start_polling(poller_obj, ifcache_entry)
@@ -257,9 +263,6 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         ifaddr = nlmsg.IFA_ADDRESS.value
         ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
         logger.debug("%s notif for %s IP %s", nl_event, ifname, ifaddr)
-        if ifcache_entry is None:
-            # Add a new intf cache entry 
-            ifcache_entry = ifcache.add(ifname)
         # Set the up state to True
         ifcache_entry.ip = ifaddr
     else: # Case of RTM_DELADDR
@@ -273,9 +276,6 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
             return
             
         ifcache_entry.ip = None
-        # If state is also DOWN, remove the cache entry
-        if not ifcache_entry.up:
-            ifcache.delete(ifcache_entry)
 
 def start_server():
 
@@ -301,6 +301,9 @@ def start_server():
         ifname = intf.IFLA_IFNAME.value
         ipr = IPRoute()
         if is_served_intf(ifname):
+            # Add a new intf cache entry for every served interface
+            ifcache_entry = ifcache.add(ifname)
+            
             # Check if there is an IP configured
             try:
                 idx = ipr.link_lookup(ifname=ifname)[0]
@@ -308,15 +311,10 @@ def start_server():
             except (AddressValueError, IndexError):
                 interface_ip = None 
 
-            # If the state is DOWN and has no IP, skip this interface  
-            if state != 'UP' and interface_ip is None:
-                continue
-                
-            # Add a new intf cache entry
-            ifcache_entry = ifcache.add(ifname)
-
+            # Update IP, MAC and Interface State in the cache
             ifcache_entry.up = (state == 'UP')
             ifcache_entry.ip = interface_ip
+            ifcache_entry.mac = get_mac_address(ifname)
 
             # If state is UP, start polling irrespective of IP address configuration
             if ifcache_entry.up:
@@ -359,11 +357,17 @@ def start_server():
                         server_ip = ifcache_entry.ip
                         if server_ip is None:
                             logger.warning("Received DHCP packet on %s with no IP address", ifname)
+                        if ifcache_entry.mac is None:
+                            logger.error("No hardware address found on the interface %s.", ifname)
+                            logger.error("Skipping DHCP packet from %s", 
+                                          ':'.join('%02x' % compat_ord(b) for b in eth.src))
+                            continue
  
                         logger.debug("Received DHCP packet on %s from %s", ifname, 
-                                      ':'.join('%02x' % compat_ord(b) for b in rawmac))
-                        # Can we totally depend on rawmac?
-                        dhcp_frame = process_dhcp_packet(ifname, server_ip, eth.src, dh, rawmac)
+                                      ':'.join('%02x' % compat_ord(b) for b in eth.src))
+
+                        dhcp_frame = process_dhcp_packet(ifname, server_ip, eth.src, dh, 
+                                                     binascii.unhexlify((ifcache_entry.mac).replace(':', ''))) #Update after creating MAC class
                         if dhcp_frame is None:
                             logger.debug("No DHCP response sent for packet on %s", ifname)
                             continue
