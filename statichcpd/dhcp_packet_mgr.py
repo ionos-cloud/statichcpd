@@ -67,15 +67,19 @@ def fetch_dhcp_req_ip(dhcp_obj: dhcp) -> Optional[str]:
 def fetch_destination_address(dhcp_obj: dhcp) -> Optional[IPv4Address]:
     try:
         if not IPv4Address(dhcp_obj.giaddr).is_unspecified:
+            # Packet was gatewayed; Unicast to gateway
             addr = str(IPv4Address(dhcp_obj.giaddr))
         elif not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
+            # Client with valid IP in Renewal state, unicast
             addr = str(IPv4Address(dhcp_obj.ciaddr))
         else:
             yiaddr = IPv4Address(dhcp_obj.yiaddr)
             is_broadcast = dhcp_obj.flags & (1 << 0) 
+            # If broadcast bit is set, send to limited broadcast address
             if is_broadcast or yiaddr.is_unspecified:
                 addr = '255.255.255.255'
             else:
+            # If broadcast bit is not set, unicast to the client
                 addr = str(yiaddr)
     except AddressValueError as err:
         logger.error("%s: Failed to fetch destination address for DHCP packet on %s", err, ifname)
@@ -310,26 +314,26 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) ->
     addr = fetch_destination_address(dhcp_obj)
     return (data, addr, server_id)
 
-def build_frame(dhcp_data: bytes, client_mac: Mac, dest_ip: str, 
+def build_frame(dhcp_data: bytes, dest_mac: Mac, dest_ip: str, 
                 src_ip: IPv4Address, ifname: str, server_mac: Mac) -> bytes:
     dh = dpkt.dhcp.DHCP(dhcp_data)
     udp = dpkt.udp.UDP(sport=67, dport=68, data=bytes(dh))
     udp.ulen = len(udp)
     ip = dpkt.ip.IP(dst=IPv4Address(dest_ip).packed,
-                    src=IPv4Address(src_ip).packed, #Alter this to support intf with multiple server ID
+                    src=IPv4Address(src_ip).packed,
                     ttl=64,
                     p=dpkt.ip.IP_PROTO_UDP,
                     data=udp)
     ip.len = len(ip)
     eth = dpkt.ethernet.Ethernet(src=bytes(server_mac),
-                                 dst=bytes(client_mac),
+                                 dst=bytes(dest_mac),
                                  type=0x0800,
                                  data = bytes(ip))
     return bytes(eth)
 
 # If there is a new msg in any of the dhcp intfs, process the data  (Incomplete)
 
-def process_dhcp_packet(ifname: str, server_addr: str, client_mac: Mac, 
+def process_dhcp_packet(ifname: str, server_addr: str, pkt_src_mac: Mac, 
                         dhcp_obj: bytes, server_mac: Mac) -> Optional[bytes]:
 
     dhcp_type = fetch_dhcp_type(dhcp_obj)
@@ -351,5 +355,17 @@ def process_dhcp_packet(ifname: str, server_addr: str, client_mac: Mac,
     if dhcp_pkt is None or address is None:
         return None
 
-    return build_frame(dhcp_pkt, Mac(dhcp_obj.chaddr), address, server_id, ifname, server_mac)
+    # If dhcp packet is gatewayed, set the destnation mac to be that of the gateway
+    # Else, use chaddr as the destination mac
+    # How to handle L2 relay agents??
+    try:
+        dest_mac = Mac(dhcp_obj.chaddr)
+        if not IPv4Address(dhcp_obj.giaddr).is_unspecified:
+            dest_mac = pkt_src_mac
+    except [AddressValueError, ValueError] as err:
+        logger.error("%s: Failed to derive destination mac for %s packet from smac %s",
+                      err, dhcp_type_to_str.get(dhcp_type, dhcp_type), str(pkt_src_mac))
+        return None
+
+    return build_frame(dhcp_pkt, dest_mac, address, server_id, ifname, server_mac)
 
