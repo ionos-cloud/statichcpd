@@ -351,5 +351,5 @@ def process_dhcp_packet(ifname: str, server_addr: str, client_mac: Mac,
     if dhcp_pkt is None or address is None:
         return None
 
-    return build_frame(dhcp_pkt, client_mac, address, server_id, ifname, server_mac)
+    return build_frame(dhcp_pkt, Mac(dhcp_obj.chaddr), address, server_id, ifname, server_mac)
 
