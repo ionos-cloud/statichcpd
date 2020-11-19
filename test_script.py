@@ -14,7 +14,7 @@ valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": (dhcp.DHCP_OPT_NETMAS
                                             "Time Offset": (dhcp.DHCP_OPT_TIMEOFFSET, dtype.INT32.value), 
                                             "Domain Name": (dhcp.DHCP_OPT_DOMAIN, dtype.STRING.value), 
                                             "IPv4": (DHCP_IP_OPCODE, dtype.IPV4.value), # Using unused option type 
-                                            "Non Default Server ID": (DHCP_NON_DEFAULT_SERVERID, dtype.IPV4.value), 
+                                            "Non Default Server ID": (DHCP_NON_DEFAULT_SERVERID_OPCODE, dtype.IPV4.value), 
                                             "Hostname": (dhcp.DHCP_OPT_HOSTNAME, dtype.STRING.value), 
                                             "NETBIOS Scope": (dhcp.DHCP_OPT_NBTCPSCOPE, dtype.STRING.value), 
                                             "MTU Interface": (dhcp.DHCP_OPT_MTUSIZE, dtype.INT16.value),

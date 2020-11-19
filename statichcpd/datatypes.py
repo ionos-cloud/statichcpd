@@ -3,6 +3,9 @@
 from abc import ABC
 from ipaddress import IPv4Network, IPv4Address
 from .logmgr import logger
+from typing import Union 
+from dpkt.compat import compat_ord
+import binascii
 
 class _IntXX(ABC):
     def __repr__(self):
@@ -35,3 +38,22 @@ class Staticrt():
         destination_descriptor = subnet_width + ((network.network_address).packed)[:significant_netoctets]
         return destination_descriptor + gateway.packed
 
+class Mac():
+    def __init__(self, mac: Union[str, bytes]):
+        if not isinstance(mac, bytes) and \
+           not isinstance(mac, str):
+           raise ValueError('Value {} cannot be represented as Mac address'.format(mac))
+        self.val = mac
+
+    def __str__(self):
+        if isinstance(self.val, bytes):
+            return ':'.join('%02x' % compat_ord(b) for b in self.val)
+        return self.val
+
+    def __repr__(self):
+        return type(self).__name__ + "(" + str(self) + ")"
+
+    def __bytes__(self):
+        if isinstance(self.val, str):
+            return binascii.unhexlify((self.val).replace(':', ''))
+        return self.val

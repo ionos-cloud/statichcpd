@@ -39,7 +39,7 @@ schema = [
 
 DHCP_IP_OPCODE = 256
 DHCP_IPV6_OPCODE = 257
-DHCP_NON_DEFAULT_SERVERID = 258
+DHCP_NON_DEFAULT_SERVERID_OPCODE = 258
 
 class dtype(Enum):
     IPV4 = 1
@@ -90,8 +90,8 @@ def init(config: SectionProxy) -> None:
     if 'additional_attributes_file' in config:
         insert_data_from(config.get('additional_attributes_file'))
 
-def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
-    logger.debug("Fetching Host conf for intf:%s mac:%s",ifname, mac)
+def fetch_host_conf_data(ifname: str, mac: Mac) -> Dict[str,Any]:
+    logger.debug("Fetching Host conf for intf:%s mac:%s",ifname, str(mac))
     result = {}
 
     cursor = dhcp_db_conn.cursor()
@@ -101,7 +101,7 @@ def fetch_host_conf_data(ifname: str, mac: str) -> Dict[str,Any]:
                          from host_configuration_data
                          join valid_attributes on 
                          host_configuration_data.attr_code = valid_attributes.opcode    
-                         where ifname=? and mac=?""", (ifname, mac)
+                         where ifname=? and mac=?""", (ifname, str(mac))
                      ):
         try:
             datatype = dtype(datatype)

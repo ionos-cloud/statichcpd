@@ -14,11 +14,9 @@ import re
 from configparser import SectionProxy
 from socket import htons
 import dpkt
-from dpkt.compat import compat_ord
 from ctypes import create_string_buffer, addressof
 from struct import pack
 import psutil
-import binascii
 
 from .dhcp_packet_mgr import process_dhcp_packet
 from .database_manager import *
@@ -34,13 +32,13 @@ def init(config: SectionProxy) -> None:
     global server_regexobj
     server_regexobj = re.compile(config['served_interface_regex'])
 
-def get_mac_address(ifname: str) -> Optional[str]:
+def get_mac_address(ifname: str) -> Optional[Mac]:
     nics = psutil.net_if_addrs()
     if ifname in nics:
         nic = nics[ifname]
         for i in nic:
             if i.family == psutil.AF_LINK:
-                return i.address
+                return Mac(i.address)
     return None
 
 # An interface cache entry exists only for an interface whose state is UP 
@@ -223,8 +221,7 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
     if nl_event == 'RTM_NEWLINK':
         ifname = nlmsg.IFLA_IFNAME.value
         state = nlmsg.IFLA_OPERSTATE.value
-        if_mac = nlmsg.IFLA_ADDRESS.value
-        print("For intf ", ifname, "set if_mac to ", if_mac)
+        if_mac = Mac(nlmsg.IFLA_ADDRESS.value)
         if not is_served_intf(ifname):
             return
         ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
@@ -366,8 +363,8 @@ def start_server():
                         logger.debug("Received DHCP packet on %s from %s", ifname, 
                                       ':'.join('%02x' % compat_ord(b) for b in eth.src))
 
-                        dhcp_frame = process_dhcp_packet(ifname, server_ip, eth.src, dh, 
-                                                     binascii.unhexlify((ifcache_entry.mac).replace(':', ''))) #Update after creating MAC class
+                        dhcp_frame = process_dhcp_packet(ifname, server_ip, Mac(eth.src), dh, 
+                                                     ifcache_entry.mac)
                         if dhcp_frame is None:
                             logger.debug("No DHCP response sent for packet on %s", ifname)
                             continue
