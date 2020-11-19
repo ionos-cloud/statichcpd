@@ -24,7 +24,7 @@ schema = [
            ifname text not null,
            mac text not null,
            constraint compkey_mac_if unique(ifname, mac));""",
-        """create table if not exists host_configuration_data (
+        """create table if not exists client_configuration (
            ifname text not null,
            mac text not null,
            attr_code int not null,
@@ -97,10 +97,10 @@ def fetch_host_conf_data(ifname: str, mac: Mac) -> Dict[str,Any]:
     cursor = dhcp_db_conn.cursor()
     for (opcode, max_count, datatype, value) in cursor.execute( 
                      """ select valid_attributes.opcode, valid_attributes.max_count, 
-                         valid_attributes.datatype, host_configuration_data.attr_val 
-                         from host_configuration_data
+                         valid_attributes.datatype, client_configuration.attr_val 
+                         from client_configuration
                          join valid_attributes on 
-                         host_configuration_data.attr_code = valid_attributes.opcode    
+                         client_configuration.attr_code = valid_attributes.opcode    
                          where ifname=? and mac=?""", (ifname, str(mac))
                      ):
         try:

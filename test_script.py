@@ -53,14 +53,14 @@ def init_client_table(mac_list: List[str], ifname_list: List[str]) -> None:
 
 def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:
     cursor = conn.cursor()
-    cursor.execute('''delete from host_configuration_data;''')
+    cursor.execute('''delete from client_configuration;''')
     conn.commit()
     for i in range(len(mac_list)):
         mac = mac_list[i]
         ifname = ifname_list[i]
         attr_list = attr_lists[i]
         for attr in attr_list:
-            cursor.execute(""" replace into host_configuration_data
+            cursor.execute(""" replace into client_configuration
                                        (ifname, mac, attr_code, attr_val) values
                                        (?, ?, ?, ?)""", (ifname, mac, attr[0], attr[1]))
         conn.commit()
