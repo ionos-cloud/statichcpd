@@ -1,0 +1,11 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_installsystemd:
+	dh_installsystemd --name=statichcpd
+
+override_dh_installinit:
+	# dh_installsystemd fails to make the service enabled without this
+	dh_installinit --name=statichcpd # --no-scripts
