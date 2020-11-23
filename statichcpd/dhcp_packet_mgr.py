@@ -353,19 +353,18 @@ def process_dhcp_packet(ifname: str, server_addr: str, pkt_src_mac: Mac,
         logger.debug("Unexpected DHCP packet type to server: %s", dhcp_type_to_str.get(dhcp_type, dhcp_type))
         dhcp_pkt, dest_addr, server_id = (None, None, None)
     if dhcp_pkt is None or address is None:
-        return None
+        return (None, None, None)
 
-    # If dhcp packet is gatewayed, set the destnation mac to be that of the gateway
-    # Else, use chaddr as the destination mac
+    # If dhcp packet is gatewayed, let the stack do the routing to gateway IP ; Return the dhcp payload
+    # Else, use chaddr as the destination mac ; Return the complete dhcp frame
     # How to handle L2 relay agents??
     try:
-        dest_mac = Mac(dhcp_obj.chaddr)
         if not IPv4Address(dhcp_obj.giaddr).is_unspecified:
-            dest_mac = pkt_src_mac
+            return (dhcp_pkt, dhcp_obj.giaddr, server_id)
+        else:
+            dest_mac = Mac(dhcp_obj.chaddr)
+            return (build_frame(dhcp_pkt, dest_mac, address, server_id, ifname, server_mac) , None, None)
     except [AddressValueError, ValueError] as err:
         logger.error("%s: Failed to derive destination mac for %s packet from smac %s",
                       err, dhcp_type_to_str.get(dhcp_type, dhcp_type), str(pkt_src_mac))
-        return None
-
-    return build_frame(dhcp_pkt, dest_mac, address, server_id, ifname, server_mac)
-
+        return (None, None, None)

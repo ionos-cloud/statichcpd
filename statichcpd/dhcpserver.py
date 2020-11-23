@@ -289,6 +289,13 @@ def start_server():
     poller_obj.register(nlsock, POLLIN)
     logger.debug("Registered Netlink socket for polling...")
 
+    try:
+        tx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        tx_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        tx_sock.bind(('', 67))
+    except OSError as err:
+        logger.error(err)
+
 
 # 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
 #    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
@@ -351,25 +358,36 @@ def start_server():
                             deactivate_and_stop_polling(poller_obj, ifcache_entry)
                             ifcache.delete(ifcache_entry)
                             continue
+                        src_mac = Mac(eth.src)
                         server_ip = ifcache_entry.ip
                         if server_ip is None:
                             logger.warning("Received DHCP packet on %s with no IP address", ifname)
                         if ifcache_entry.mac is None:
                             logger.error("No hardware address found on the interface %s.", ifname)
-                            logger.error("Skipping DHCP packet from %s", 
-                                          ':'.join('%02x' % compat_ord(b) for b in eth.src))
+                            logger.error("Skipping DHCP packet from %s", str(src_mac))
                             continue
  
-                        logger.debug("Received DHCP packet on %s from %s", ifname, 
-                                      ':'.join('%02x' % compat_ord(b) for b in eth.src))
+                        logger.debug("Received DHCP packet on %s from %s", ifname, str(src_mac))
 
-                        dhcp_frame = process_dhcp_packet(ifname, server_ip, Mac(eth.src), dh, 
-                                                     ifcache_entry.mac)
+                        dhcp_frame, gw_address, server_id = process_dhcp_packet(ifname, server_ip, src_mac, dh, 
+                                                            ifcache_entry.mac)
                         if dhcp_frame is None:
                             logger.debug("No DHCP response sent for packet on %s", ifname)
                             continue
                         try:
-                            intf_sock.send(dhcp_frame)
+                            # If gw_address is None, 'dhcp_frame' is a complete ethernet frame
+                            # Else, 'dhcp_frame' is just dhcp hdr payload
+                            if gw_address is None:
+                                intf_sock.send(dhcp_frame)
+                            else:
+                                SOL_IP_PKTINFO = 8
+                                logger.debug("Unicasting DHCP reply: Gateway IP:%s Src IP:%s Src Mac: %s", 
+                                              str(gw_address), str(server_id), str(src_mac))
+                                pktinfo = pack('=I4s4s', 0, socket.inet_aton(str(server_id)), 
+                                                            socket.inet_aton(str(gw_address)))
+                                tx_sock.sendmsg([dhcp_frame], 
+                                                [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)], 
+                                                0, (str(gw_address), 68))
                         except OSError as err:
                             logger.error("""%s: Failed to send packet on %s. 
                                           Removing interface from cache""", err, ifname)
