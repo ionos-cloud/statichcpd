@@ -7,7 +7,7 @@ from pyroute2.netlink.rtnl.ifinfmsg import ifinfmsg
 from pyroute2.netlink.rtnl.ifaddrmsg import ifaddrmsg
 import socket
 from logging import Logger
-from typing import Dict, List, Any, Tuple, TypeVar
+from typing import Dict, List, Any, Tuple, TypeVar, Optional
 from ipaddress import AddressValueError
 from dpkt import dhcp
 import re
@@ -19,7 +19,8 @@ from struct import pack
 import psutil
 
 from .dhcp_packet_mgr import process_dhcp_packet
-from .database_manager import *
+from .database_manager import exit
+from .datatypes import * 
 from .logmgr import logger
 
 #  If there is a new NL msg, add the new interface to poll if it's create 
@@ -275,123 +276,129 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         ifcache_entry.ip = None
 
 def start_server():
-
-# 1. Create an NL socket and bind
-    nlsock = IPRoute()
     try:
-        nlsock.bind(groups=(rtnl.RTMGRP_LINK | rtnl.RTMGRP_IPV4_IFADDR))
-    except OSError as err:
-        logger.exception("Exception binding netlink socket")
+    # 1. Create an NL socket and bind
+        nlsock = IPRoute()
+        try:
+            nlsock.bind(groups=(rtnl.RTMGRP_LINK | rtnl.RTMGRP_IPV4_IFADDR))
+        except OSError as err:
+            logger.exception("%s: Exception binding netlink socket", err)
+            raise KeyboardInterrupt
 
-# 2. Poll on the NL socket
+    # 2. Poll on the NL socket
 
-    poller_obj = poll()
-    poller_obj.register(nlsock, POLLIN)
-    logger.debug("Registered Netlink socket for polling...")
+        poller_obj = poll()
+        poller_obj.register(nlsock, POLLIN)
+        logger.debug("Registered Netlink socket for polling...")
 
-    try:
-        tx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        tx_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        tx_sock.bind(('', 67))
-    except OSError as err:
-        logger.error(err)
+        try:
+            tx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            tx_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            tx_sock.bind(('', 67))
+        except OSError as err:
+            logger.error("%s: Failed to open TX socket", err)
+            if tx_sock is not None:
+                tx_sock.close()
+            raise KeyboardInterrupt
 
 
-# 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
-#    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
+    # 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
+    #    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
 
-    for intf in nlsock.get_links():
-        state = intf.IFLA_OPERSTATE.value
-        ifname = intf.IFLA_IFNAME.value
-        ipr = IPRoute()
-        if is_served_intf(ifname):
-            # Add a new intf cache entry for every served interface
-            ifcache_entry = ifcache.add(ifname)
-            
-            # Check if there is an IP configured
-            try:
-                idx = ipr.link_lookup(ifname=ifname)[0]
-                interface_ip = str(IPv4Address(ipr.get_addr(index=idx)[0].get_attr('IFA_ADDRESS')))
-            except (AddressValueError, IndexError):
-                interface_ip = None 
+        for intf in nlsock.get_links():
+            state = intf.IFLA_OPERSTATE.value
+            ifname = intf.IFLA_IFNAME.value
+            ipr = IPRoute()
+            if is_served_intf(ifname):
+                # Add a new intf cache entry for every served interface
+                ifcache_entry = ifcache.add(ifname)
+                
+                # Check if there is an IP configured
+                try:
+                    idx = ipr.link_lookup(ifname=ifname)[0]
+                    interface_ip = str(IPv4Address(ipr.get_addr(index=idx)[0].get_attr('IFA_ADDRESS')))
+                except (AddressValueError, IndexError):
+                    interface_ip = None 
 
-            # Update IP, MAC and Interface State in the cache
-            ifcache_entry.up = (state == 'UP')
-            ifcache_entry.ip = interface_ip
-            ifcache_entry.mac = get_mac_address(ifname)
+                # Update IP, MAC and Interface State in the cache
+                ifcache_entry.up = (state == 'UP')
+                ifcache_entry.ip = interface_ip
+                ifcache_entry.mac = get_mac_address(ifname)
 
-            # If state is UP, start polling irrespective of IP address configuration
-            if ifcache_entry.up:
-                activate_and_start_polling(poller_obj, ifcache_entry)
+                # If state is UP, start polling irrespective of IP address configuration
+                if ifcache_entry.up:
+                    activate_and_start_polling(poller_obj, ifcache_entry)
 
-# 4. Keep checking for any events on the polled FDs and process them
-    while True:
-        fdEvent = poller_obj.poll(1024)
-        for fd, event in fdEvent:
-            if event & POLLIN:                    #TODO: Add code to handle other events
-                if fd == nlsock.fileno():
-                    for nlmsg in nlsock.get():
-                        process_nlmsg(poller_obj, nlmsg)
-                else:
-                    ifcache_entry = ifcache.fetch_ifcache_by_fd(fd)
-                    if not ifcache_entry:
-                        logger.error("Received packet on untracked fd %d!", fd)
-                        raise
-                    intf_sock = ifcache_entry.sock
-                    if intf_sock:
-                        ifname = ifcache_entry.ifname
-                        try:
-                            msg, (ifname, ethproto, pkttype, arphrd, rawmac) = intf_sock.recvfrom(1024)
-                            eth = dpkt.ethernet.Ethernet(msg)
-                            if not isinstance(eth.data, dpkt.ip.IP):
+    # 4. Keep checking for any events on the polled FDs and process them
+        while True:
+            fdEvent = poller_obj.poll(1024)
+            for fd, event in fdEvent:
+                if event & POLLIN:                    #TODO: Add code to handle other events
+                    if fd == nlsock.fileno():
+                        for nlmsg in nlsock.get():
+                            process_nlmsg(poller_obj, nlmsg)
+                    else:
+                        ifcache_entry = ifcache.fetch_ifcache_by_fd(fd)
+                        if not ifcache_entry:
+                            logger.error("Received packet on untracked fd %d!", fd)
+                            raise KeyboardInterrupt
+                        intf_sock = ifcache_entry.sock
+                        if intf_sock:
+                            ifname = ifcache_entry.ifname
+                            try:
+                                msg, (ifname, ethproto, pkttype, arphrd, rawmac) = intf_sock.recvfrom(1024)
+                                eth = dpkt.ethernet.Ethernet(msg)
+                                if not isinstance(eth.data, dpkt.ip.IP):
+                                    continue
+
+                                ip = eth.data
+                                if not isinstance(ip.data, dpkt.udp.UDP):
+                                    continue
+
+                                udp = ip.data
+                                dh = dpkt.dhcp.DHCP(udp.data)
+                            except OSError as err:
+                                logger.error('''%s: Failed to receive packet on %s. 
+                                              Removing interface from cache''', err, ifname)
+                                deactivate_and_stop_polling(poller_obj, ifcache_entry)
+                                ifcache.delete(ifcache_entry)
                                 continue
-
-                            ip = eth.data
-                            if not isinstance(ip.data, dpkt.udp.UDP):
+                            src_mac = Mac(eth.src)
+                            server_ip = ifcache_entry.ip
+                            if server_ip is None:
+                                logger.warning("Received DHCP packet on %s with no IP address", ifname)
+                            if ifcache_entry.mac is None:
+                                logger.error("No hardware address found on the interface %s.", ifname)
+                                logger.error("Skipping DHCP packet from %s", src_mac)
                                 continue
-
-                            udp = ip.data
-                            dh = dpkt.dhcp.DHCP(udp.data)
-                        except OSError as err:
-                            logger.error('''%s: Failed to receive packet on %s. 
-                                          Removing interface from cache''', err, ifname)
-                            deactivate_and_stop_polling(poller_obj, ifcache_entry)
-                            ifcache.delete(ifcache_entry)
-                            continue
-                        src_mac = Mac(eth.src)
-                        server_ip = ifcache_entry.ip
-                        if server_ip is None:
-                            logger.warning("Received DHCP packet on %s with no IP address", ifname)
-                        if ifcache_entry.mac is None:
-                            logger.error("No hardware address found on the interface %s.", ifname)
-                            logger.error("Skipping DHCP packet from %s", str(src_mac))
-                            continue
  
-                        logger.debug("Received DHCP packet on %s from %s", ifname, str(src_mac))
+                            logger.debug("Received DHCP packet on %s from %s", ifname, src_mac)
 
-                        dhcp_frame, gw_address, server_id = process_dhcp_packet(ifname, server_ip, src_mac, dh, 
-                                                            ifcache_entry.mac)
-                        if dhcp_frame is None:
-                            logger.debug("No DHCP response sent for packet on %s", ifname)
-                            continue
-                        try:
-                            # If gw_address is None, 'dhcp_frame' is a complete ethernet frame
-                            # Else, 'dhcp_frame' is just dhcp hdr payload
-                            if gw_address is None:
-                                intf_sock.send(dhcp_frame)
-                            else:
-                                SOL_IP_PKTINFO = 8
-                                logger.debug("Unicasting DHCP reply: Gateway IP:%s Src IP:%s Src Mac: %s", 
-                                              str(gw_address), str(server_id), str(src_mac))
-                                pktinfo = pack('=I4s4s', 0, socket.inet_aton(str(server_id)), 
-                                                            socket.inet_aton(str(gw_address)))
-                                tx_sock.sendmsg([dhcp_frame], 
-                                                [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)], 
-                                                0, (str(gw_address), 68))
-                        except OSError as err:
-                            logger.error("""%s: Failed to send packet on %s. 
-                                          Removing interface from cache""", err, ifname)
-                            deactivate_and_stop_polling(poller_obj, ifcache_entry)
-                            ifcache.delete(ifcache_entry)
-                            continue
-
+                            dhcp_frame, gw_address, server_id = process_dhcp_packet(ifname, server_ip, src_mac, dh, 
+                                                                ifcache_entry.mac)
+                            if dhcp_frame is None:
+                                logger.debug("No DHCP response sent for packet on %s", ifname)
+                                continue
+                            try:
+                                # If gw_address is None, 'dhcp_frame' is a complete ethernet frame
+                                # Else, 'dhcp_frame' is just dhcp hdr payload
+                                if gw_address is None:
+                                    intf_sock.send(dhcp_frame)
+                                else:
+                                    SOL_IP_PKTINFO = 8
+                                    logger.debug("Unicasting DHCP reply: Gateway IP:%s Src IP:%s Src Mac: %s", 
+                                                  gw_address, server_id, src_mac)
+                                    pktinfo = pack('=I4s4s', 0, socket.inet_aton(str(server_id)), 
+                                                                socket.inet_aton(str(gw_address)))
+                                    tx_sock.sendmsg([dhcp_frame], 
+                                                    [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)], 
+                                                    0, (str(gw_address), 68))
+                            except OSError as err:
+                                logger.error("""%s: Failed to send packet on %s. 
+                                              Removing interface from cache""", err, ifname)
+                                deactivate_and_stop_polling(poller_obj, ifcache_entry)
+                                ifcache.delete(ifcache_entry)
+                                continue
+    except KeyboardInterrupt:
+        exit()
+        logger.info("Server exiting..")

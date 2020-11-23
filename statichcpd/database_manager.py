@@ -54,7 +54,7 @@ def insert_data_from(csv_filename: str) -> None:
     with open (csv_filename, 'r') as f:
         reader = csv.reader(f)
         columns = next(reader)
-        query = 'replace into valid_attributes({0}) values ({1})'.format(','.join(columns), ','.join('?' * len(columns)))
+        query = 'insert into valid_attributes({0}) values ({1})'.format(','.join(columns), ','.join('?' * len(columns)))
         for row in reader:
             # Opcode can be an integer or dpkt.dhcp module optcode alias
             try:
@@ -77,6 +77,7 @@ def init(config: SectionProxy) -> None:
     cursor = dhcp_db_conn.cursor()
     for command in schema:
         cursor.execute(command)
+    cursor.execute('delete from valid_attributes')
     dhcp_db_conn.commit()
     cursor.close()
     logger.debug("Created config tables")
@@ -89,6 +90,11 @@ def init(config: SectionProxy) -> None:
     # Insert user defined attributes, if any
     if 'additional_attributes_file' in config:
         insert_data_from(config.get('additional_attributes_file'))
+
+def exit():
+    global dhcp_db_conn
+    dhcp_db_conn.close()
+    logger.debug("Closed the connection to DHCP database")
 
 def fetch_host_conf_data(ifname: str, mac: Mac) -> Dict[str,Any]:
     logger.debug("Fetching Host conf for intf:%s mac:%s",ifname, str(mac))

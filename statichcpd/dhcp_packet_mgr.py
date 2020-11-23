@@ -360,11 +360,11 @@ def process_dhcp_packet(ifname: str, server_addr: str, pkt_src_mac: Mac,
     # How to handle L2 relay agents??
     try:
         if not IPv4Address(dhcp_obj.giaddr).is_unspecified:
-            return (dhcp_pkt, dhcp_obj.giaddr, server_id)
+            return (dhcp_pkt, IPv4Address(dhcp_obj.giaddr), server_id)
         else:
             dest_mac = Mac(dhcp_obj.chaddr)
             return (build_frame(dhcp_pkt, dest_mac, address, server_id, ifname, server_mac) , None, None)
-    except [AddressValueError, ValueError] as err:
+    except (AddressValueError, ValueError) as err:
         logger.error("%s: Failed to derive destination mac for %s packet from smac %s",
                       err, dhcp_type_to_str.get(dhcp_type, dhcp_type), str(pkt_src_mac))
         return (None, None, None)

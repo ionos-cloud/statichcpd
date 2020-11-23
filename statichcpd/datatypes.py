@@ -40,20 +40,21 @@ class Staticrt():
 
 class Mac():
     def __init__(self, mac: Union[str, bytes]):
-        if not isinstance(mac, bytes) and \
-           not isinstance(mac, str):
-           raise ValueError('Value {} cannot be represented as Mac address'.format(mac))
-        self.val = mac
+        if isinstance(mac, bytes):
+            self.val = mac
+        elif isinstance(mac, str):
+            self.val = binascii.unhexlify((mac).replace(':', ''))
+        elif isinstance(mac, Mac):
+            self.val = mac.val
+        else:
+           raise ValueError('''Value {} of type {} cannot be represented 
+                               as Mac address'''.format(mac, type(mac)))
 
     def __str__(self):
-        if isinstance(self.val, bytes):
-            return ':'.join('%02x' % compat_ord(b) for b in self.val)
-        return self.val
+        return ':'.join('%02x' % compat_ord(b) for b in self.val)
 
     def __repr__(self):
         return type(self).__name__ + "(" + str(self) + ")"
 
     def __bytes__(self):
-        if isinstance(self.val, str):
-            return binascii.unhexlify((self.val).replace(':', ''))
         return self.val
