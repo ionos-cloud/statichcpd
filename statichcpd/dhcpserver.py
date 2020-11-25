@@ -390,9 +390,10 @@ def start_server():
                                                   gw_address, server_id, src_mac)
                                     pktinfo = pack('=I4s4s', 0, socket.inet_aton(str(server_id)), 
                                                                 socket.inet_aton(str(gw_address)))
+                                    # In case of TX to gateway, destination socket must be BOOTPS
                                     tx_sock.sendmsg([dhcp_frame], 
                                                     [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)], 
-                                                    0, (str(gw_address), 68))
+                                                    0, (str(gw_address), 67))
                             except OSError as err:
                                 logger.error("""%s: Failed to send packet on %s. 
                                               Removing interface from cache""", err, ifname)

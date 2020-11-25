@@ -100,12 +100,13 @@ def fetch_addr_lease_time(dhcp_obj: dhcp, opt_tuple: Tuple):
 
 def append_mandatory_options(dhcp_obj: dhcp, opt_tuple: Tuple, option: str, server_id: IPv4Address) -> Tuple:
     opt_list = list(opt_tuple)
-    lease_time = fetch_addr_lease_time(dhcp_obj, opt_tuple) 
-    opt_list.extend([(dhcp.DHCP_OPT_MSGTYPE, bytes([option])),
-                     (dhcp.DHCP_OPT_LEASE_SEC, (lease_time).to_bytes(4, 'big')),
-                     (dhcp.DHCP_OPT_SERVER_ID, server_id.packed),
+    dhcp_type = fetch_dhcp_type(dhcp_obj)
+    opt_list.extend([(dhcp.DHCP_OPT_MSGTYPE, bytes([option]))])
+    if dhcp_type != dhcp.DHCPINFORM:
+        lease_time = fetch_addr_lease_time(dhcp_obj, opt_tuple) 
+        opt_list.extend([(dhcp.DHCP_OPT_LEASE_SEC, (lease_time).to_bytes(4, 'big'))])
+    opt_list.extend([(dhcp.DHCP_OPT_SERVER_ID, server_id.packed),
                      (255, b'')])
-   
     return tuple(opt_list)
 
 # Purpose : Constructs the dhcp options list with corresponding values as requested by client 
@@ -314,6 +315,28 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) ->
     addr = fetch_destination_address(dhcp_obj)
     return (data, addr, server_id)
 
+def process_dhcp_inform(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) -> Optional[Tuple[bytes, IPv4Address, IPv4Address]]:
+    client_mac =  Mac(dhcp_obj.chaddr)
+    host_conf_data = fetch_host_conf_data(ifname, client_mac)
+    if not host_conf_data:
+        logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", str(client_mac), ifname)
+        return (None, None, None)
+
+    if DHCP_NON_DEFAULT_SERVERID_OPCODE in host_conf_data:
+        logger.debug("For client %s on intf %s using non-default server id: %s (default server id: %s))",
+                      str(client_mac), ifname, host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE], server_id)
+        server_id = host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE]
+
+    logger.debug("Constructing DHCP ACK for client: %s", client_mac)
+    request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
+    dhcp_packet = construct_dhcp_ack(dhcp_obj, ifname, server_id, None, request_list_opt, host_conf_data)
+    if dhcp_packet is None:
+        logger.error("Failed to construct DHCP response packet on interface %s", ifname)
+        return (None, None, None)
+    data = bytes(dhcp_packet)
+    addr = fetch_destination_address(dhcp_obj)
+    return (data, addr, server_id)
+
 def build_frame(dhcp_data: bytes, dest_mac: Mac, dest_ip: str, 
                 src_ip: IPv4Address, ifname: str, server_mac: Mac) -> bytes:
     dh = dpkt.dhcp.DHCP(dhcp_data)
@@ -348,10 +371,15 @@ def process_dhcp_packet(ifname: str, server_addr: str, pkt_src_mac: Mac,
         dhcp_pkt, address, server_id = process_dhcp_discover(dhcp_obj, server_id, ifname)
     elif (dhcp_type == dhcp.DHCPREQUEST):
         dhcp_pkt, address, server_id = process_dhcp_request(dhcp_obj, server_id, ifname)
-    else:
-        # Handle other packet types!!
-        logger.debug("Unexpected DHCP packet type to server: %s", dhcp_type_to_str.get(dhcp_type, dhcp_type))
+    elif (dhcp_type == dhcp.DHCPINFORM):
+        dhcp_pkt, address, server_id = process_dhcp_inform(dhcp_obj, server_id, ifname)
+    elif dhcp_type in dhcp_type_to_str:
+        logger.debug("Received DHCP packet of type %s. Ignoring.", dhcp_type_to_str.get(dhcp_type, dhcp_type))
         dhcp_pkt, dest_addr, server_id = (None, None, None)
+    else:
+        logger.error("Unexpected packet type for DHCP payload %d", dhcp_type)
+        dhcp_pkt, dest_addr, server_id = (None, None, None)
+
     if dhcp_pkt is None or address is None:
         return (None, None, None)
 

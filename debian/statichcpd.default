@@ -1,2 +1,2 @@
 #OPTIONS="-v"
-NAMESPACE = "dhcp-ns"
+NAMESPACE="dhcp-ns"
