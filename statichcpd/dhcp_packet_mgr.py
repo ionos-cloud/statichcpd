@@ -4,7 +4,7 @@ import dpkt
 from dpkt import dhcp
 from dpkt.compat import compat_ord
 import struct
-from ipaddress import IPv4Address
+from ipaddress import IPv4Address, AddressValueError
 import socket
 from configparser import SectionProxy
 from typing import Any, List, Tuple, Optional
@@ -201,7 +201,8 @@ def process_dhcp_discover(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) -
             logger.debug("Constructing DHCP OFFER with IP: %s ", offer_ip)
 
     if DHCP_NON_DEFAULT_SERVERID_OPCODE in host_conf_data:
-        logger.debug("For client %s on intf %s using non-default server id: %s (default server id: %s))",
+        logger.debug('''For client %s on intf %s using 
+                        non-default server id: %s (default server id: %s))''',
                       str(client_mac), ifname, host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE], server_id)
         server_id = host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE]
 
@@ -245,10 +246,13 @@ def fetch_client_state(server_id: IPv4Address, ciaddr: str, requested_ip: str) -
             return state.SELECTING_INIT_REBOOT
     except:
         return state.INVALID
-        
+  
 def process_dhcp_request(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) -> Optional[Tuple[bytes, IPv4Address, IPv4Address]]:
     client_mac =  Mac(dhcp_obj.chaddr)
-    server_id_in_request = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_SERVER_ID)
+    try:
+        server_id_in_request = IPv4Address(fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_SERVER_ID))
+    except AddressValueError:
+        server_id_in_request = IPv4Address(0)
     ciaddr_in_request = dhcp_obj.ciaddr
     requested_ip = fetch_dhcp_req_ip(dhcp_obj)
     client_state = fetch_client_state(server_id_in_request, ciaddr_in_request, requested_ip)
@@ -268,6 +272,15 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) ->
         logger.debug("For client %s on intf %s using non-default server id: %s (default server id: %s))",
                       str(client_mac), ifname, host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE], server_id)
         server_id = host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE]
+
+    valid_serverid = True if (not server_id_in_request or server_id_in_request.is_unspecified 
+                              or server_id_in_request == server_id) else False
+    if not valid_serverid:
+        logger.error('''Server identifier mismatch: ServerID from client = %s 
+                                  Configured ServerID = %s. 
+                                  Ignoring DHCPREQUEST from %s on interface %s''',
+                                  server_id_in_request, server_id, client_mac, ifname)
+        return (None, None, None)
 
     # Validate the requested IP
     if client_state is state.INVALID:
