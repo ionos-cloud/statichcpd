@@ -201,9 +201,9 @@ def process_dhcp_discover(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) -
             logger.debug("Constructing DHCP OFFER with IP: %s ", offer_ip)
 
     if DHCP_NON_DEFAULT_SERVERID_OPCODE in host_conf_data:
-        logger.debug('''For client %s on intf %s using 
-                        non-default server id: %s (default server id: %s))''',
-                      str(client_mac), ifname, host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE], server_id)
+        logger.debug("For client %s on intf %s using "
+                     "non-default server id: %s (default server id: %s))",
+                     str(client_mac), ifname, host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE], server_id)
         server_id = host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE]
 
     dhcp_offer = construct_dhcp_offer(dhcp_obj, ifname, server_id, offer_ip, request_list_opt, host_conf_data)
@@ -273,13 +273,14 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) ->
                       str(client_mac), ifname, host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE], server_id)
         server_id = host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE]
 
-    valid_serverid = True if (not server_id_in_request or server_id_in_request.is_unspecified 
-                              or server_id_in_request == server_id) else False
+    valid_serverid = (not server_id_in_request 
+                      or server_id_in_request.is_unspecified 
+                      or server_id_in_request == server_id)
     if not valid_serverid:
-        logger.error('''Server identifier mismatch: ServerID from client = %s 
-                                  Configured ServerID = %s. 
-                                  Ignoring DHCPREQUEST from %s on interface %s''',
-                                  server_id_in_request, server_id, client_mac, ifname)
+        logger.error("Server identifier mismatch: ServerID from client = %s "
+                     "Configured ServerID = %s."
+                     "Ignoring DHCPREQUEST from %s on interface %s",
+                     server_id_in_request, server_id, client_mac, ifname)
         return (None, None, None)
 
     # Validate the requested IP
