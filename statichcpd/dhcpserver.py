@@ -28,10 +28,12 @@ from .logmgr import logger
 
 any_nlmsg = TypeVar('any_nlmsg', ifinfmsg, ifaddrmsg)
 server_regexobj = None
+routing_disabled = False
 
 def init(config: SectionProxy) -> None:
-    global server_regexobj
+    global server_regexobj, routing_disabled
     server_regexobj = re.compile(config['served_interface_regex'])
+    routing_disabled = config.getboolean('routing_disabled', False)
 
 def get_mac_address(ifname: str) -> Optional[Mac]:
     nics = psutil.net_if_addrs()
@@ -309,13 +311,12 @@ def start_server():
     # 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
     #    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
 
-        ipr = IPRoute()
         for intf in nlsock.get_links():
             state = intf.IFLA_OPERSTATE.value
             ifname = intf.IFLA_IFNAME.value
             if is_served_intf(ifname):
                 try:
-                    idx = ipr.link_lookup(ifname=ifname)[0]
+                    idx = nlsock.link_lookup(ifname=ifname)[0]
                 except IndexError:
                     logger.error("Failed to fetch interface idx "
                                  "for %s. Skipping", 
@@ -327,7 +328,7 @@ def start_server():
 
                 # Check if there is an IP configured
                 try:
-                    interface_ip = str(IPv4Address(ipr.get_addr(index=idx)[0].get_attr('IFA_ADDRESS')))
+                    interface_ip = str(IPv4Address(nlsock.get_addr(index=idx)[0].get_attr('IFA_ADDRESS')))
                 except (AddressValueError, IndexError):
                     interface_ip = None 
                 
@@ -369,8 +370,8 @@ def start_server():
                                 udp = ip.data
                                 dh = dpkt.dhcp.DHCP(udp.data)
                             except OSError as err:
-                                logger.error('''%s: Failed to receive packet on %s. 
-                                              Removing interface from cache''', err, ifname)
+                                logger.error("%s: Failed to receive packet on %s. "
+                                             " Removing interface from cache", err, ifname)
                                 deactivate_and_stop_polling(poller_obj, ifcache_entry)
                                 ifcache.delete(ifcache_entry)
                                 continue
@@ -396,20 +397,31 @@ def start_server():
                                 if gw_address is None:
                                     intf_sock.send(dhcp_frame)
                                 else:
+                                    destination_ip, port = gw_address
                                     SOL_IP_PKTINFO = 8
-                                    logger.debug("Unicasting DHCP reply: Gateway IP:%s Src IP:%s Src Mac: %s", 
-                                                  gw_address, server_id, src_mac)
-                                    # Non-zero intf idx and Non-default source IP used unlike how the documentation suggests
-                                    # In case of a routing supported namespace, skip specifying the source interface
-                                    pktinfo = pack('=I4s4s', ifcache_entry.idx, socket.inet_aton(str(server_id)),
-                                                                 socket.inet_aton(str(gw_address)))
-                                    # In case of TX to gateway, destination socket must be BOOTPS
+                                    logger.debug("Unicasting DHCP reply: Dst IP:%s Src IP:%s Request Src Mac: %s", 
+                                                  destination_ip, server_id, src_mac)
+                                    # As per RFC 1542 Section 5.4:
+                                    # In case the packet holds a non-zero ciaddr or giaddr, 
+                                    #   Reply should follow normal IP routing => Use udp socket to unicast
+                                    # But if routing is disabled, specify the source interface for the reply
+                                    if routing_disabled:
+                                        # Non-zero intf idx and Non-default source IP used unlike 
+                                        # how the ip(7) linux documentation for IP_PKTINFO suggests
+                                        logger.debug("Routing disabled: Unicast reply to %s through interface %s", 
+                                                      gw_address, ifname)
+                                        pktinfo = pack('=I4s4s', ifcache_entry.idx, socket.inet_aton(str(server_id)),
+                                                                 socket.inet_aton(str(destination_ip)))
+                                    else:
+                                        logger.debug("Routing enabled: Unicast reply to %s", gw_address)
+                                        pktinfo = pack('=I4s4s', 0, socket.inet_aton(str(server_id)), 
+                                                                    socket.inet_aton(str(destination_ip)))
                                     tx_sock.sendmsg([dhcp_frame], 
                                                     [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)], 
-                                                    0, (str(gw_address), 67))
+                                                    0, (str(destination_ip), port))
                             except OSError as err:
-                                logger.error("""%s: Failed to send packet on %s. 
-                                              Removing interface from cache""", err, ifname)
+                                logger.error("%s: Failed to send packet on %s. "
+                                             " Removing interface from cache", err, ifname)
                                 deactivate_and_stop_polling(poller_obj, ifcache_entry)
                                 ifcache.delete(ifcache_entry)
                                 continue

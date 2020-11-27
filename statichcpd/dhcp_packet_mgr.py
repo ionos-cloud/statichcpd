@@ -58,20 +58,21 @@ def fetch_dhcp_req_ip(dhcp_obj: dhcp) -> Optional[str]:
                         err, data, dhcp_type_to_str.get(opcode, opcode),
                         str(Mac(dhcp_obj.chaddr)))
         return None
-   
-# If giaddr != 0, send to giaddr
+
+# RFC 1542 Section 5.4
 # If ciaddr != 0, send to ciaddr
+# If giaddr != 0, send to giaddr
 # If ciaddr = 0 and giaddr = 0 and broadcast = 1, send broadcast
 # If ciaddr = 0 and giaddr = 0 and broadcast = 0, send to yiaddr
 
 def fetch_destination_address(dhcp_obj: dhcp) -> Optional[IPv4Address]:
     try:
-        if not IPv4Address(dhcp_obj.giaddr).is_unspecified:
-            # Packet was gatewayed; Unicast to gateway
-            addr = str(IPv4Address(dhcp_obj.giaddr))
-        elif not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
+        if not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
             # Client with valid IP in Renewal state, unicast
             addr = str(IPv4Address(dhcp_obj.ciaddr))
+        elif not IPv4Address(dhcp_obj.giaddr).is_unspecified:
+            # Packet was gatewayed; Unicast to gateway
+            addr = str(IPv4Address(dhcp_obj.giaddr))
         else:
             yiaddr = IPv4Address(dhcp_obj.yiaddr)
             is_broadcast = dhcp_obj.flags & (1 << 0) 
@@ -318,7 +319,8 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) ->
         dhcp_packet = construct_dhcp_ack(dhcp_obj, ifname, server_id, offer_ip, request_list_opt, host_conf_data)
     else:
         request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
-        logger.debug("Requested IP (%s) doesn't match available IP (%s)", requested_ip, offer_ip)
+        if client_state is not state.INVALID:
+            logger.debug("Requested IP (%s) doesn't match available IP (%s)", requested_ip, offer_ip)
         dhcp_packet = construct_dhcp_nak(dhcp_obj, ifname, server_id, requested_ip, request_list_opt, host_conf_data)
 
     if dhcp_packet is None:
@@ -397,18 +399,22 @@ def process_dhcp_packet(ifname: str, server_addr: str, pkt_src_mac: Mac,
     if dhcp_pkt is None or address is None:
         return (None, None, None)
 
-    # If dhcp packet is gatewayed, let the stack do the routing to gateway IP ; Return the dhcp payload
-    # Else, use chaddr as the destination mac ; Return the complete dhcp frame
+    # As per RFC 1542 Section 5.4:
+    # In case the packet holds a non-zero ciaddr or giaddr, 
+    #   Reply should follow normal IP routing => Use udp socket to unicast
+    # Any other case (directed unicast): 
+    #       Use raw socket with chaddr as destination MAC. Return the ethernet frame
+
     # How to handle L2 relay agents??
     try:
-        if not IPv4Address(dhcp_obj.giaddr).is_unspecified:
-            return (dhcp_pkt, IPv4Address(dhcp_obj.giaddr), server_id)
-        # TODO: In case of a routing supported namespace, DHCP reply to clients with valid ciaddr
-        # outside the network should be sent through udp socket and not through raw sockets
+        if not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
+            return (dhcp_pkt, (IPv4Address(dhcp_obj.ciaddr), 68), server_id)
+        elif not IPv4Address(dhcp_obj.giaddr).is_unspecified:
+            return (dhcp_pkt, (IPv4Address(dhcp_obj.giaddr), 67), server_id)
         else:
             dest_mac = Mac(dhcp_obj.chaddr)
             return (build_frame(dhcp_pkt, dest_mac, address, server_id, ifname, server_mac) , None, None)
     except (AddressValueError, ValueError) as err:
-        logger.error("%s: Failed to derive destination mac for %s packet from smac %s",
+        logger.error("%s: Failed to build dhcp reply for %s packet from smac %s",
                       err, dhcp_type_to_str.get(dhcp_type, dhcp_type), str(pkt_src_mac))
         return (None, None, None)
