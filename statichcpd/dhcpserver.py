@@ -47,21 +47,22 @@ def get_mac_address(ifname: str) -> Optional[Mac]:
 # becomes down and IP is also deleted, the entry will get erased
 
 class InterfaceCacheEntry():
-    def __init__(self, ifname):
+    def __init__(self, ifname, idx):
         self.fd = None
         self.sock = None
         self.ifname = ifname
         self.ip = None
         self.mac = None
         self.up = False
+        self.idx = idx
 
 class InterfaceCache(object):
     def __init__(self):
         self._by_fd = {}   # Access using fd will be available only after the entry is active!
         self._by_ifname = {}
 
-    def add(self, ifname):
-        entry = InterfaceCacheEntry(ifname)
+    def add(self, ifname, idx):
+        entry = InterfaceCacheEntry(ifname, idx)
         self._by_ifname[ifname] = entry
         logger.debug("Created a new cache entry for %s ", ifname)
         return entry
@@ -216,9 +217,9 @@ def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheE
 
 def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
     nl_event = nlmsg['event']
+    if_index = nlmsg['index']
     if nl_event not in ['RTM_NEWLINK', 'RTM_DELLINK', 'RTM_NEWADDR', 'RTM_DELADDR']:
         return
-    
     if nl_event == 'RTM_NEWLINK':
         ifname = nlmsg.IFLA_IFNAME.value
         state = nlmsg.IFLA_OPERSTATE.value
@@ -227,7 +228,7 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
             return
         ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
         if ifcache_entry is None:
-            ifcache_entry = ifcache.add(ifname)
+            ifcache_entry = ifcache.add(ifname, if_index)
         ifcache_entry.mac = if_mac
        
         if state == 'LOWERLAYERDOWN' or state == 'DOWN':
@@ -260,6 +261,9 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         logger.debug("%s notif for %s ", nl_event, ifname)
         ifaddr = nlmsg.IFA_ADDRESS.value
         ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
+        if ifcache_entry is None:
+            logger.debug("Ignoring %s for interface %s which is not in cache", nl_event, ifname)
+            return
         logger.debug("%s notif for %s IP %s", nl_event, ifname, ifaddr)
         # Set the up state to True
         ifcache_entry.ip = ifaddr
@@ -305,21 +309,28 @@ def start_server():
     # 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
     #    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
 
+        ipr = IPRoute()
         for intf in nlsock.get_links():
             state = intf.IFLA_OPERSTATE.value
             ifname = intf.IFLA_IFNAME.value
-            ipr = IPRoute()
             if is_served_intf(ifname):
-                # Add a new intf cache entry for every served interface
-                ifcache_entry = ifcache.add(ifname)
-                
-                # Check if there is an IP configured
                 try:
                     idx = ipr.link_lookup(ifname=ifname)[0]
+                except IndexError:
+                    logger.error("Failed to fetch interface idx "
+                                 "for %s. Skipping", 
+                                 ifname)
+                    continue
+
+                # Add a new intf cache entry for every served interface
+                ifcache_entry = ifcache.add(ifname, idx)
+
+                # Check if there is an IP configured
+                try:
                     interface_ip = str(IPv4Address(ipr.get_addr(index=idx)[0].get_attr('IFA_ADDRESS')))
                 except (AddressValueError, IndexError):
                     interface_ip = None 
-
+                
                 # Update IP, MAC and Interface State in the cache
                 ifcache_entry.up = (state == 'UP')
                 ifcache_entry.ip = interface_ip
@@ -388,8 +399,10 @@ def start_server():
                                     SOL_IP_PKTINFO = 8
                                     logger.debug("Unicasting DHCP reply: Gateway IP:%s Src IP:%s Src Mac: %s", 
                                                   gw_address, server_id, src_mac)
-                                    pktinfo = pack('=I4s4s', 0, socket.inet_aton(str(server_id)), 
-                                                                socket.inet_aton(str(gw_address)))
+                                    # Non-zero intf idx and Non-default source IP used unlike how the documentation suggests
+                                    # In case of a routing supported namespace, skip specifying the source interface
+                                    pktinfo = pack('=I4s4s', ifcache_entry.idx, socket.inet_aton(str(server_id)),
+                                                                 socket.inet_aton(str(gw_address)))
                                     # In case of TX to gateway, destination socket must be BOOTPS
                                     tx_sock.sendmsg([dhcp_frame], 
                                                     [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)], 

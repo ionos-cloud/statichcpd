@@ -403,6 +403,8 @@ def process_dhcp_packet(ifname: str, server_addr: str, pkt_src_mac: Mac,
     try:
         if not IPv4Address(dhcp_obj.giaddr).is_unspecified:
             return (dhcp_pkt, IPv4Address(dhcp_obj.giaddr), server_id)
+        # TODO: In case of a routing supported namespace, DHCP reply to clients with valid ciaddr
+        # outside the network should be sent through udp socket and not through raw sockets
         else:
             dest_mac = Mac(dhcp_obj.chaddr)
             return (build_frame(dhcp_pkt, dest_mac, address, server_id, ifname, server_mac) , None, None)
