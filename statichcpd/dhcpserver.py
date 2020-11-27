@@ -103,10 +103,11 @@ def is_served_intf(ifname: str) -> bool:
 
 
 #Filter on port 67 generated using the following command:
-#sudo tcpdump -p -i lo -dd -s 1024 '(port 67)' | sed -e 's/{ /(/' -e 's/ }/)/
-
+#sudo tcpdump -p -i lo -dd -s 1024 'inbound and (port 67)' | sed -e 's/{ /(/' -e 's/ }/)/'
 
 dhcp_filter_list = [
+(0x28, 0, 0, 0xfffff004),
+(0x15, 23, 0, 0x00000004),
 (0x28, 0, 0, 0x0000000c),
 (0x15, 0, 8, 0x000086dd),
 (0x30, 0, 0, 0x00000014),
