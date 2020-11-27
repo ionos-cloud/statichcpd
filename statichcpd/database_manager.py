@@ -101,12 +101,12 @@ def fetch_host_conf_data(ifname: str, mac: Mac) -> Dict[str,Any]:
     result = {}
 
     cursor = dhcp_db_conn.cursor()
-    for (opcode, max_count, datatype, value) in cursor.execute( 
-                     """ select valid_attributes.opcode, valid_attributes.max_count, 
-                         valid_attributes.datatype, client_configuration.attr_val 
+    for (opcode, max_count, datatype, value) in cursor.execute(
+                     """ select valid_attributes.opcode, valid_attributes.max_count,
+                         valid_attributes.datatype, client_configuration.attr_val
                          from client_configuration
-                         join valid_attributes on 
-                         client_configuration.attr_code = valid_attributes.opcode    
+                         join valid_attributes on
+                         client_configuration.attr_code = valid_attributes.opcode
                          where ifname=? and mac=?""", (ifname, str(mac))
                      ):
         try:

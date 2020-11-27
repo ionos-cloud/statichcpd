@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from select import poll, POLLIN, POLLOUT, POLLERR 
+from select import poll, POLLIN, POLLOUT, POLLERR
 from pyroute2 import IPRoute
 from pyroute2.netlink import rtnl
 from pyroute2.netlink.rtnl.ifinfmsg import ifinfmsg
@@ -20,10 +20,10 @@ import psutil
 
 from .dhcp_packet_mgr import process_dhcp_packet
 from .database_manager import exit
-from .datatypes import * 
+from .datatypes import *
 from .logmgr import logger
 
-#  If there is a new NL msg, add the new interface to poll if it's create 
+#  If there is a new NL msg, add the new interface to poll if it's create
 #  and remove the intf from poll if it's delete
 
 any_nlmsg = TypeVar('any_nlmsg', ifinfmsg, ifaddrmsg)
@@ -44,7 +44,7 @@ def get_mac_address(ifname: str) -> Optional[Mac]:
                 return Mac(i.address)
     return None
 
-# An interface cache entry exists only for an interface whose state is UP 
+# An interface cache entry exists only for an interface whose state is UP
 # OR has a valid IP address configured. At any point, if the interface state
 # becomes down and IP is also deleted, the entry will get erased
 
@@ -101,7 +101,7 @@ ifcache = InterfaceCache()
 def is_served_intf(ifname: str) -> bool:
     return bool(server_regexobj.search(ifname))
 
- 
+
 #Filter on port 67 generated using the following command:
 #sudo tcpdump -p -i lo -dd -s 1024 '(port 67)' | sed -e 's/{ /(/' -e 's/ }/)/
 
@@ -147,7 +147,7 @@ def add_sock_binding(ifname: str) -> Optional[socket.socket]:
         intf_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, ifname.encode())
         intf_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         SO_ATTACH_FILTER = 26 # defined in linux/filter.h
-        filter_bytestring = b''.join([pack('HBBI', code, jt, jf, k) for 
+        filter_bytestring = b''.join([pack('HBBI', code, jt, jf, k) for
                                       code, jt, jf, k in dhcp_filter_list])
         sock_filter_buf = create_string_buffer(filter_bytestring)
         sock_fprog = pack('HL', len(dhcp_filter_list), addressof(sock_filter_buf))
@@ -166,7 +166,7 @@ def add_sock_binding(ifname: str) -> Optional[socket.socket]:
 
     return intf_sock
 
-# Registration with poll is only done for an interface whose state is UP 
+# Registration with poll is only done for an interface whose state is UP
 # AND has a valid IP address configured. At any point, if the interface state
 # becomes down or IP is deleted, the interface will be de-registered
 
@@ -186,7 +186,7 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
 
     # Activate the cache entry
     ifcache.activate(ifcache_entry, intf_sock)
- 
+
     # Register with poller object
     logger.debug("Registering fd: %d with poll", intf_sock.fileno())
     try:
@@ -194,7 +194,7 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
         logger.info("Polling on interface %s", ifname)
     except AttributeError as err:
         logger.error("%s: Registering with poll failed for %s", err, ifname)
-        # Cleanup the socket binding and deativate the cache entry: 
+        # Cleanup the socket binding and deativate the cache entry:
         # To re-register the intf, restart of process/reconfiguration of intf will be required!
         ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
         if ifcache_entry:
@@ -214,7 +214,7 @@ def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheE
     except KeyError as err:
         logger.error("%s: Deregistering with poll failed for %s", err, ifname)
         return
-    
+
     ifcache.deactivate(ifcache_entry)
 
 def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
@@ -232,7 +232,7 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         if ifcache_entry is None:
             ifcache_entry = ifcache.add(ifname, if_index)
         ifcache_entry.mac = if_mac
-       
+
         if state == 'LOWERLAYERDOWN' or state == 'DOWN':
             logger.debug("State change to DOWN for %s ", ifname)
             # When the state is down, deactivate and stop polling
@@ -278,7 +278,7 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         # When the IP is removed, remove ip value from cache
         if not ifcache_entry:
             return
-            
+
         ifcache_entry.ip = None
 
 def start_server():
@@ -319,7 +319,7 @@ def start_server():
                     idx = nlsock.link_lookup(ifname=ifname)[0]
                 except IndexError:
                     logger.error("Failed to fetch interface idx "
-                                 "for %s. Skipping", 
+                                 "for %s. Skipping",
                                  ifname)
                     continue
 
@@ -330,8 +330,8 @@ def start_server():
                 try:
                     interface_ip = str(IPv4Address(nlsock.get_addr(index=idx)[0].get_attr('IFA_ADDRESS')))
                 except (AddressValueError, IndexError):
-                    interface_ip = None 
-                
+                    interface_ip = None
+
                 # Update IP, MAC and Interface State in the cache
                 ifcache_entry.up = (state == 'UP')
                 ifcache_entry.ip = interface_ip
@@ -383,10 +383,10 @@ def start_server():
                                 logger.error("No hardware address found on the interface %s.", ifname)
                                 logger.error("Skipping DHCP packet from %s", src_mac)
                                 continue
- 
+
                             logger.debug("Received DHCP packet on %s from %s", ifname, src_mac)
 
-                            dhcp_frame, gw_address, server_id = process_dhcp_packet(ifname, server_ip, src_mac, dh, 
+                            dhcp_frame, gw_address, server_id = process_dhcp_packet(ifname, server_ip, src_mac, dh,
                                                                 ifcache_entry.mac)
                             if dhcp_frame is None:
                                 logger.debug("No DHCP response sent for packet on %s", ifname)
@@ -399,25 +399,25 @@ def start_server():
                                 else:
                                     destination_ip, port = gw_address
                                     SOL_IP_PKTINFO = 8
-                                    logger.debug("Unicasting DHCP reply: Dst IP:%s Src IP:%s Request Src Mac: %s", 
+                                    logger.debug("Unicasting DHCP reply: Dst IP:%s Src IP:%s Request Src Mac: %s",
                                                   destination_ip, server_id, src_mac)
                                     # As per RFC 1542 Section 5.4:
-                                    # In case the packet holds a non-zero ciaddr or giaddr, 
+                                    # In case the packet holds a non-zero ciaddr or giaddr,
                                     #   Reply should follow normal IP routing => Use udp socket to unicast
                                     # But if routing is disabled, specify the source interface for the reply
                                     if routing_disabled:
-                                        # Non-zero intf idx and Non-default source IP used unlike 
+                                        # Non-zero intf idx and Non-default source IP used unlike
                                         # how the ip(7) linux documentation for IP_PKTINFO suggests
-                                        logger.debug("Routing disabled: Unicast reply to %s through interface %s", 
+                                        logger.debug("Routing disabled: Unicast reply to %s through interface %s",
                                                       gw_address, ifname)
                                         pktinfo = pack('=I4s4s', ifcache_entry.idx, socket.inet_aton(str(server_id)),
                                                                  socket.inet_aton(str(destination_ip)))
                                     else:
                                         logger.debug("Routing enabled: Unicast reply to %s", gw_address)
-                                        pktinfo = pack('=I4s4s', 0, socket.inet_aton(str(server_id)), 
+                                        pktinfo = pack('=I4s4s', 0, socket.inet_aton(str(server_id)),
                                                                     socket.inet_aton(str(destination_ip)))
-                                    tx_sock.sendmsg([dhcp_frame], 
-                                                    [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)], 
+                                    tx_sock.sendmsg([dhcp_frame],
+                                                    [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)],
                                                     0, (str(destination_ip), port))
                             except OSError as err:
                                 logger.error("%s: Failed to send packet on %s. "

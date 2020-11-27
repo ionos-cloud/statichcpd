@@ -3,7 +3,7 @@
 from abc import ABC
 from ipaddress import IPv4Network, IPv4Address
 from .logmgr import logger
-from typing import Union 
+from typing import Union
 from dpkt.compat import compat_ord
 import binascii
 
@@ -30,7 +30,7 @@ class Staticrt():
             self.value = (IPv4Network(cidr), IPv4Address(gw))
         except ValueError as err:
             logger.error("%s: Invalid route entry %s", err, val)
-    
+
     def __bytes__(self):        # Returns a byte string in accordance with RFC 3442 DHCP Option 121
         network, gateway = self.value
         significant_netoctets = (network.prefixlen - 1) // 8 + 1
@@ -47,7 +47,7 @@ class Mac():
         elif isinstance(mac, Mac):
             self.val = mac.val
         else:
-           raise ValueError('''Value {} of type {} cannot be represented 
+           raise ValueError('''Value {} of type {} cannot be represented
                                as Mac address'''.format(mac, type(mac)))
 
     def __str__(self):
