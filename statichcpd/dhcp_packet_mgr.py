@@ -83,7 +83,7 @@ def fetch_destination_address(dhcp_obj: dhcp) -> Optional[IPv4Address]:
             # If broadcast bit is not set, unicast to the client
                 addr = str(yiaddr)
     except AddressValueError as err:
-        logger.error("%s: Failed to fetch destination address for DHCP packet on %s", err, ifname)
+        logger.error("Error %s fetching destination address for DHCP packet on %s", err, ifname)
         return None
     logger.debug("Destination IP for DHCP response: %s ", addr)
     return addr
@@ -138,7 +138,8 @@ def construct_dhcp_opt_list(request_list_opt: List[int], ifname: str,
                 elif all(isinstance(ele, Staticrt) for ele in data):
                     encoded_data = b''.join([bytes(elem) for elem in data])
                 else:
-                    logger.error("Elements of unexpected type in the list: %s".format(data))
+                    logger.error("Elements of unexpected datatype "
+                                 "in the client parameter list: %s".format(data))
             else:
                 logger.error("Value(%s) of unexpected type received for opcode %d".format(data, opcode))
             opt_list.append((opcode, encoded_data))
@@ -209,7 +210,8 @@ def process_dhcp_discover(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) -
 
     dhcp_offer = construct_dhcp_offer(dhcp_obj, ifname, server_id, offer_ip, request_list_opt, host_conf_data)
     if not dhcp_offer:
-        logger.error("Failed to construct DHCP offer packet on interface %s", ifname)
+        logger.error("Error constructing DHCP offer packet "
+                      "on interface %s for client %s", ifname, client_mac)
         return (None, None, None)
 
     data = bytes(dhcp_offer)
@@ -324,7 +326,8 @@ def process_dhcp_request(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) ->
         dhcp_packet = construct_dhcp_nak(dhcp_obj, ifname, server_id, requested_ip, request_list_opt, host_conf_data)
 
     if dhcp_packet is None:
-        logger.error("Failed to construct DHCP response packet on interface %s", ifname)
+        logger.error("Error constructing DHCP response "
+                     "packet on interface %s for client %s", ifname, client_mac)
         return (None, None, None)
 
     data = bytes(dhcp_packet)
@@ -347,7 +350,8 @@ def process_dhcp_inform(dhcp_obj: dhcp, server_id: IPv4Address, ifname: str) -> 
     request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
     dhcp_packet = construct_dhcp_ack(dhcp_obj, ifname, server_id, None, request_list_opt, host_conf_data)
     if dhcp_packet is None:
-        logger.error("Failed to construct DHCP response packet on interface %s", ifname)
+        logger.error("Error constructing DHCP response to DHCPINFORM "
+                     "on interface %s for client %s", ifname, client_mac)
         return (None, None, None)
     data = bytes(dhcp_packet)
     addr = fetch_destination_address(dhcp_obj)
@@ -393,7 +397,7 @@ def process_dhcp_packet(ifname: str, server_addr: str, pkt_src_mac: Mac,
         logger.debug("Received DHCP packet of type %s. Ignoring.", dhcp_type_to_str.get(dhcp_type, dhcp_type))
         dhcp_pkt, dest_addr, server_id = (None, None, None)
     else:
-        logger.error("Unexpected packet type for DHCP payload %d", dhcp_type)
+        logger.error("Unexpected packet type %d for DHCP payload", dhcp_type)
         dhcp_pkt, dest_addr, server_id = (None, None, None)
 
     if dhcp_pkt is None or address is None:
@@ -415,6 +419,6 @@ def process_dhcp_packet(ifname: str, server_addr: str, pkt_src_mac: Mac,
             dest_mac = Mac(dhcp_obj.chaddr)
             return (build_frame(dhcp_pkt, dest_mac, address, server_id, ifname, server_mac) , None, None)
     except (AddressValueError, ValueError) as err:
-        logger.error("%s: Failed to build dhcp reply for %s packet from smac %s",
+        logger.error("Error %s building dhcp reply for %s packet from source mac %s",
                       err, dhcp_type_to_str.get(dhcp_type, dhcp_type), str(pkt_src_mac))
         return (None, None, None)

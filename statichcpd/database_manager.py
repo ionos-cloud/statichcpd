@@ -112,7 +112,9 @@ def fetch_host_conf_data(ifname: str, mac: Mac) -> Dict[str,Any]:
         try:
             datatype = dtype(datatype)
         except ValueError as err:
-            logger.error("Invalid datatype entry %d for opcode %d ", datatype, opcode)
+            logger.error("Invalid datatype entry %d for opcode %d "
+                         "for client (%s, %s)",
+                         datatype, opcode, ifname, mac)
             cursor.close()
             continue   # Shouldn't remaining entries be processed for this client?
         if max_count == 1:                           ## Assumed that application handles insertion of attr values
@@ -125,7 +127,9 @@ def fetch_host_conf_data(ifname: str, mac: Mac) -> Dict[str,Any]:
             elif datatype is dtype.STRING:
                 result[opcode] = value
             else:
-                logger.error("Invalid entry (datatype, maxcount):(%d, %d) ", datatype, max_count)
+                logger.error("Invalid entry (datatype, maxcount):(%d, %d) "
+                             "for client (%s, %s)",
+                             datatype, max_count, ifname, mac)
         else:
             if opcode not in result:
                 result[opcode] = []
@@ -134,7 +138,9 @@ def fetch_host_conf_data(ifname: str, mac: Mac) -> Dict[str,Any]:
             elif datatype is dtype.STATICRT:
                 result[opcode].append(Staticrt(value))
             else:
-                logger.error("Invalid entry (datatype, maxcount):(%d, %d) ", datatype, max_count)
+                logger.error("Invalid entry (datatype, maxcount):(%d, %d) "
+                             "for client (%s, %s)",
+                             datatype, max_count, ifname, mac)
     cursor.close()
     return result
 

@@ -140,7 +140,8 @@ def add_sock_binding(ifname: str) -> Optional[socket.socket]:
         ETH_P_ALL = 3 # defined in linux/if_ether.h
         intf_sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, htons(ETH_P_ALL))
     except OSError as err:
-        logger.error("%s Failed to open socket for %s. Skipping poll registration", err, ifname)
+        logger.error("Error %s opening socket for %s. "
+                     "Skipping service registration for the interface", err, ifname)
         return None
 
     # Set socket options and bind the socket
@@ -154,14 +155,14 @@ def add_sock_binding(ifname: str) -> Optional[socket.socket]:
         sock_fprog = pack('HL', len(dhcp_filter_list), addressof(sock_filter_buf))
         intf_sock.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, sock_fprog)
     except OSError as err:
-        logger.error("%s Failed to set socket options for %s", err, ifname)
+        logger.error("Error %s setting socket options for %s", err, ifname)
         intf_sock.close()
         return None
 
     try:
         intf_sock.bind((ifname, ETH_P_ALL))
     except OSError as err:
-        logger.error("%s Failed to bind to the socket for %s", err, ifname)
+        logger.error("Error %s binding to the socket for %s", err, ifname)
         intf_sock.close()   # No entry is added to internal datastructs at this point and not registered with poll
         return None
 
@@ -182,7 +183,7 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
     # Create and bind a socket
     intf_sock = add_sock_binding(ifname)
     if intf_sock is None:
-        logger.error("Failed to add socket binding for %s. Not registering intf with poll", ifname)
+        logger.error("Failed to add socket binding for %s. Not servicing the interface", ifname)
         return
 
     # Activate the cache entry
@@ -192,9 +193,9 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
     logger.debug("Registering fd: %d with poll", intf_sock.fileno())
     try:
         poller_obj.register(intf_sock.fileno(), POLLIN)
-        logger.info("Polling on interface %s", ifname)
+        logger.info("Start servicing interface %s", ifname)
     except AttributeError as err:
-        logger.error("%s: Registering with poll failed for %s", err, ifname)
+        logger.error("Error %s registering %s for service", err, ifname)
         # Cleanup the socket binding and deativate the cache entry:
         # To re-register the intf, restart of process/reconfiguration of intf will be required!
         ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
@@ -211,9 +212,9 @@ def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheE
 
     try:
         poller_obj.unregister(ifcache_entry.fd)
-        logger.info("Deregistered interface %s with fd: %d", ifname, ifcache_entry.fd)
+        logger.info("Stop servicing interface %s (fd: %d)", ifname, ifcache_entry.fd)
     except KeyError as err:
-        logger.error("%s: Deregistering with poll failed for %s", err, ifname)
+        logger.error("Error %s deregistering %s from service", err, ifname)
         return
 
     ifcache.deactivate(ifcache_entry)
@@ -303,7 +304,7 @@ def start_server():
             tx_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             tx_sock.bind(('', 67))
         except OSError as err:
-            logger.error("%s: Failed to open TX socket", err)
+            logger.error("Error %s opening UDP socket for unicast replies", err)
             if tx_sock is not None:
                 tx_sock.close()
             raise KeyboardInterrupt
@@ -318,10 +319,10 @@ def start_server():
             if is_served_intf(ifname):
                 try:
                     idx = nlsock.link_lookup(ifname=ifname)[0]
-                except IndexError:
-                    logger.error("Failed to fetch interface idx "
-                                 "for %s. Skipping",
-                                 ifname)
+                except IndexError as err:
+                    logger.error("Error %s fetching interface index "
+                                 "for %s. Unable to serve the interface",
+                                 err, ifname)
                     continue
 
                 # Add a new intf cache entry for every served interface
@@ -353,7 +354,7 @@ def start_server():
                     else:
                         ifcache_entry = ifcache.fetch_ifcache_by_fd(fd)
                         if not ifcache_entry:
-                            logger.error("Received packet on untracked fd %d!", fd)
+                            logger.error("Received packet on untracked interface file descriptor %d!", fd)
                             raise KeyboardInterrupt
                         intf_sock = ifcache_entry.sock
                         if intf_sock:
@@ -371,18 +372,18 @@ def start_server():
                                 udp = ip.data
                                 dh = dpkt.dhcp.DHCP(udp.data)
                             except OSError as err:
-                                logger.error("%s: Failed to receive packet on %s. "
-                                             " Removing interface from cache", err, ifname)
+                                logger.error("Error %s receiving packet on %s. "
+                                             " Stop servicing interface.", err, ifname)
                                 deactivate_and_stop_polling(poller_obj, ifcache_entry)
                                 ifcache.delete(ifcache_entry)
                                 continue
                             src_mac = Mac(eth.src)
                             server_ip = ifcache_entry.ip
                             if server_ip is None:
-                                logger.warning("Received DHCP packet on %s with no IP address", ifname)
+                                logger.warning("Received DHCP packet on interface %s with no IP address", ifname)
                             if ifcache_entry.mac is None:
                                 logger.error("No hardware address found on the interface %s.", ifname)
-                                logger.error("Skipping DHCP packet from %s", src_mac)
+                                logger.error("Unable to process DHCP packet from %s", src_mac)
                                 continue
 
                             logger.debug("Received DHCP packet on %s from %s", ifname, src_mac)
@@ -421,8 +422,8 @@ def start_server():
                                                     [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)],
                                                     0, (str(destination_ip), port))
                             except OSError as err:
-                                logger.error("%s: Failed to send packet on %s. "
-                                             " Removing interface from cache", err, ifname)
+                                logger.error("Error %s sending packet on %s. "
+                                             " Stop servicing the interface.", err, ifname)
                                 deactivate_and_stop_polling(poller_obj, ifcache_entry)
                                 ifcache.delete(ifcache_entry)
                                 continue
