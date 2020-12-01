@@ -1,3 +1,16 @@
+statichcpd (1.01) all-xenial-jessie; urgency=medium
+
+  * Added support to handle DHCPINFORM
+  * Server ID validation
+  * Minor fixes
+  * Use source interface idx while replying to gatewayed pkts
+  * Unicast reply compliant with rfc 1542
+  * Removal of trailing whitespaces
+  * Raw socket filter updated to listen only over inbound packets
+  * Updated log strings
+
+ -- Reshma Sreekumar <reshma.sreekumar@cloud.ionos.com>  Tue, 01 Dec 2020 17:09:37 +0100
+
 statichcpd (1.0) all-xenial-jessie; urgency=medium
 
   [ Reshma Sreekumar ]
