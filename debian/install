@@ -1,3 +1,4 @@
 statichcpd.conf /etc/statichcpd/
 default_attr.csv /usr/share/statichcpd/
+default_v6attr.csv /usr/share/statichcpd/
 statichcpd_client_attr_list.csv /etc/statichcpd/

@@ -19,9 +19,11 @@ from struct import pack
 import psutil
 
 from .dhcp_packet_mgr import process_dhcp_packet
+from .dhcp6_packet_mgr import process_dhcp6_packet
 from .database_manager import exit
 from .datatypes import *
 from .logmgr import logger
+from .dhcp6 import *
 
 #  If there is a new NL msg, add the new interface to poll if it's create
 #  and remove the intf from poll if it's delete
@@ -50,10 +52,13 @@ def get_mac_address(ifname: str) -> Optional[Mac]:
 
 class InterfaceCacheEntry():
     def __init__(self, ifname, idx):
-        self.fd = None
-        self.sock = None
+        self.v4fd = None
+        self.v6fd = None
+        self.v4sock = None
+        self.v6sock = None
         self.ifname = ifname
         self.ip = None
+        self.ip6 = None
         self.mac = None
         self.up = False
         self.idx = idx
@@ -71,8 +76,10 @@ class InterfaceCache(object):
 
     def delete(self, entry):
         logger.debug("Deleting cache entry for %s", entry.ifname)
-        if entry.fd is not None: # Access using fd will be availabe only after activation
-            del self._by_fd[entry.fd]
+        if entry.v4fd is not None: # Access using fd will be availabe only after activation
+            del self._by_fd[entry.v4fd]
+        if entry.v6fd is not None: # Access using fd will be availabe only after activation
+            del self._by_fd[entry.v6fd]
         del self._by_ifname[entry.ifname]
 
     def fetch_ifcache_by_fd(self, fd):
@@ -81,18 +88,28 @@ class InterfaceCache(object):
     def fetch_ifcache_by_ifname(self, ifname):
         return self._by_ifname.get(ifname)
 
-    def activate(self, entry, sock):
-        entry.sock = sock
-        entry.fd =  sock.fileno()
-        self._by_fd[entry.fd] = entry
+    def activate(self, entry, v4sock, v6sock):
+        if v4sock:
+            entry.v4sock = v4sock
+            entry.v4fd =  v4sock.fileno()
+            self._by_fd[entry.v4fd] = entry
+        if v6sock:
+            entry.v6sock = v6sock
+            entry.v6fd =  v6sock.fileno()
+            self._by_fd[entry.v6fd] = entry
         self._by_ifname[entry.ifname] =  entry
 
     def deactivate(self, entry):
-        if entry.sock:
-            entry.sock.close()
-        entry.sock = None
-        entry.fd =  None
-        self._by_fd[entry.fd] = entry
+        if entry.v4sock:
+            entry.v4sock.close()
+        if entry.v6sock:
+            entry.v6sock.close()
+        entry.v4sock = None
+        entry.v6sock = None
+        entry.v4fd =  None
+        entry.v6fd =  None
+        #self._by_fd[entry.v4fd] = entry
+        #self._by_fd[entry.v6fd] = entry
         self._by_ifname[entry.ifname] =  entry
 
 
@@ -134,13 +151,47 @@ dhcp_filter_list = [
 (0x6, 0, 0, 0x00000000),
 ]
 
-def add_sock_binding(ifname: str) -> Optional[socket.socket]:
+def add_v6sock_binding(ifname: str) -> Optional[socket.socket]:
+    ipr = IPRoute()
+    idx = ipr.link_lookup(ifname=ifname)[0]
+    idx_s = pack("I", idx)
+
+    # Create a socket
+    try:
+        intf_sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    except OSError as err:
+        logger.error("Error %s opening IPv6 UDP socket for %s.", err, ifname)
+        return None
+
+    # Set socket options and bind the socket
+    try:
+        mcast_addr = "ff02::1:2"
+        intf_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, ifname.encode())
+        intf_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, idx_s)
+        group = socket.inet_pton(socket.AF_INET6, mcast_addr) + idx_s
+        intf_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, group)
+    except OSError as err:
+        logger.error("Error %s setting IPv6 UDP socket options for %s", err, ifname)
+        intf_sock.close()
+        return None
+
+    try:
+        intf_sock.bind(('', 547))
+    except OSError as err:
+        logger.error("Error %s binding the IPv6 UDP socket for %s", err, ifname)
+        intf_sock.close()
+        return None
+
+    return intf_sock
+
+
+def add_v4sock_binding(ifname: str) -> Optional[socket.socket]:
     # Create a socket
     try:
         ETH_P_ALL = 3 # defined in linux/if_ether.h
         intf_sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, htons(ETH_P_ALL))
     except OSError as err:
-        logger.error("Error %s opening socket for %s. "
+        logger.error("Error %s opening IPv4 RAW socket for %s. "
                      "Skipping service registration for the interface", err, ifname)
         return None
 
@@ -155,14 +206,14 @@ def add_sock_binding(ifname: str) -> Optional[socket.socket]:
         sock_fprog = pack('HL', len(dhcp_filter_list), addressof(sock_filter_buf))
         intf_sock.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, sock_fprog)
     except OSError as err:
-        logger.error("Error %s setting socket options for %s", err, ifname)
+        logger.error("Error %s setting IPv4 RAW socket options for %s", err, ifname)
         intf_sock.close()
         return None
 
     try:
         intf_sock.bind((ifname, ETH_P_ALL))
     except OSError as err:
-        logger.error("Error %s binding to the socket for %s", err, ifname)
+        logger.error("Error %s binding the IPv4 RAW socket for %s", err, ifname)
         intf_sock.close()   # No entry is added to internal datastructs at this point and not registered with poll
         return None
 
@@ -176,24 +227,38 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
     ifname = ifcache_entry.ifname
 
     # Skip for already activated interface
-    if ifcache_entry.fd is not None:
+    if ifcache_entry.v4fd is not None and \
+       ifcache_entry.v6fd is not None:
         logger.debug("Interface %s is already active. Skipping..", ifname)
         return
 
     # Create and bind a socket
-    intf_sock = add_sock_binding(ifname)
-    if intf_sock is None:
-        logger.error("Failed to add socket binding for %s. Not servicing the interface", ifname)
+    intf_v4sock = ifcache_entry.v4sock if ifcache_entry.v4sock is not None else add_v4sock_binding(ifname)
+    if intf_v4sock is None:
+        logger.error("Failed to add v4 socket binding for %s.", ifname)
+
+    intf_v6sock = ifcache_entry.v6sock if ifcache_entry.v6sock is not None else add_v6sock_binding(ifname)
+    if intf_v6sock is None:
+        logger.error("Failed to add socket binding for %s. ", ifname)
+
+    if intf_v6sock is None and intf_v4sock is None:
+        logger.error("Failed to open IPv4 and IPv6 sockets for interface %s."
+                     " Not servicing the interface.",
+                       ifname)
         return
 
     # Activate the cache entry
-    ifcache.activate(ifcache_entry, intf_sock)
+    ifcache.activate(ifcache_entry, intf_v4sock, intf_v6sock)
 
     # Register with poller object
-    logger.debug("Registering fd: %d with poll", intf_sock.fileno())
     try:
-        poller_obj.register(intf_sock.fileno(), POLLIN)
-        logger.info("Start servicing interface %s", ifname)
+        if intf_v4sock is not None:
+            logger.debug("Registering v4 fd: %d with poll", intf_v4sock.fileno())
+            poller_obj.register(intf_v4sock.fileno(), POLLIN)
+        if intf_v6sock is not None:
+            logger.debug("Registering v6 fd: %d with poll", intf_v6sock.fileno())
+            poller_obj.register(intf_v6sock.fileno(), POLLIN)
+        logger.info("Start servicing the interface %s", ifname)
     except AttributeError as err:
         logger.error("Error %s registering %s for service", err, ifname)
         # Cleanup the socket binding and deativate the cache entry:
@@ -206,13 +271,18 @@ def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheE
     ifname = ifcache_entry.ifname
 
     # Skip already deactivated entries
-    if ifcache_entry is None or ifcache_entry.fd is None:
+    if ifcache_entry is None or \
+       (ifcache_entry.v4fd is None and ifcache_entry.v6fd is None):
 	       logger.debug("Ignoring non-registered intf: %s", ifname)
 	       return
 
     try:
-        poller_obj.unregister(ifcache_entry.fd)
-        logger.info("Stop servicing interface %s (fd: %d)", ifname, ifcache_entry.fd)
+        if ifcache_entry.v4fd is not None:
+            poller_obj.unregister(ifcache_entry.v4fd)
+            logger.info("Stop servicing interface %s (v4 fd: %d)", ifname, ifcache_entry.v4fd)
+        if ifcache_entry.v6fd is not None:
+            poller_obj.unregister(ifcache_entry.v6fd)
+            logger.info("Stop servicing interface %s (v6 fd: %d)", ifname, ifcache_entry.v6fd)
     except KeyError as err:
         logger.error("Error %s deregistering %s from service", err, ifname)
         return
@@ -304,7 +374,7 @@ def start_server():
             tx_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             tx_sock.bind(('', 67))
         except OSError as err:
-            logger.error("Error %s opening UDP socket for unicast replies", err)
+            logger.error("Error %s opening IPv4 UDP socket for unicast replies", err)
             if tx_sock is not None:
                 tx_sock.close()
             raise KeyboardInterrupt
@@ -356,9 +426,20 @@ def start_server():
                         if not ifcache_entry:
                             logger.error("Received packet on untracked interface file descriptor %d!", fd)
                             raise KeyboardInterrupt
-                        intf_sock = ifcache_entry.sock
-                        if intf_sock:
-                            ifname = ifcache_entry.ifname
+                        if fd == ifcache_entry.v4fd:
+                            intf_sock = ifcache_entry.v4sock
+                            isv4 = True
+                        else:
+                            intf_sock = ifcache_entry.v6sock
+                            isv4 = False
+                        
+                        ifname = ifcache_entry.ifname
+                        if intf_sock is None:
+                            logger.error("Error finding a valid socket "
+                                         "for interface %s and file descriptor %d",
+                                         ifname, fd)
+                            raise KeyboardInterrupt
+                        if isv4:
                             try:
                                 msg, (ifname, ethproto, pkttype, arphrd, rawmac) = intf_sock.recvfrom(1024)
                                 eth = dpkt.ethernet.Ethernet(msg)
@@ -398,6 +479,7 @@ def start_server():
                                 # Else, 'dhcp_frame' is just dhcp hdr payload
                                 if gw_address is None:
                                     intf_sock.send(dhcp_frame)
+                                    continue
                                 else:
                                     destination_ip, port = gw_address
                                     SOL_IP_PKTINFO = 8
@@ -421,12 +503,32 @@ def start_server():
                                     tx_sock.sendmsg([dhcp_frame],
                                                     [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)],
                                                     0, (str(destination_ip), port))
+                                    continue
                             except OSError as err:
                                 logger.error("Error %s sending packet on %s. "
                                              " Stop servicing the interface.", err, ifname)
                                 deactivate_and_stop_polling(poller_obj, ifcache_entry)
                                 ifcache.delete(ifcache_entry)
                                 continue
+
+                        # Case of IPv6 packet
+                        try:
+                            msg, saddr = intf_sock.recvfrom(1024)
+                        except OSError as err:
+                            logger.error("Error %s receiving IPv6 packet on %s. "
+                                         " Stop servicing the interface.", err, ifname)
+                            deactivate_and_stop_polling(poller_obj, ifcache_entry)
+                            ifcache.delete(ifcache_entry)
+                            continue
+
+                        try:
+                            if len(msg) > 0:
+                                dhcp6_msg = Message(msg)
+                                logger.debug(repr(dhcp6_msg))
+                                pkt = process_dhcp6_packet(ifname, dhcp6_msg, ifcache_entry.mac)
+                        except Exception as err:
+                            logger.error(err)
+
     except KeyboardInterrupt:
         exit()
         logger.info("Server exiting..")
