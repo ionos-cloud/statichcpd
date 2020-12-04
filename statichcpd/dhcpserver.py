@@ -526,8 +526,17 @@ def start_server():
                                 dhcp6_msg = Message(msg)
                                 logger.debug(repr(dhcp6_msg))
                                 pkt = process_dhcp6_packet(ifname, dhcp6_msg, ifcache_entry.mac)
-                        except Exception as err:
-                            logger.error(err)
+                                if pkt is None:
+                                    logger.debug("No DHCP6 response sent for packet on %s", ifname)
+                                    continue
+                                intf_sock.sendto(pkt, (saddr[0], saddr[1]))
+                        except OSError as err:
+                            logger.error("Error %s sending packet on %s. "
+                                         "Stop servicing the interface.", err, ifname)
+                            deactivate_and_stop_polling(poller_obj, ifcache_entry)
+                            ifcache.delete(ifcache_entry)
+                            continue
+
 
     except KeyboardInterrupt:
         exit()

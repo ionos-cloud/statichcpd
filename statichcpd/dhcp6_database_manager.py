@@ -131,7 +131,6 @@ def fetch_v6host_conf_data(ifname: str, duid: Mac) -> Dict[str,Any]:
                              "for client (%s, %s)",
                              datatype, max_count, ifname, duid)
         else:
-            print(opcode, value)
             if opcode not in result:
                 result[opcode] = []
             if datatype is dtype.IPV6:

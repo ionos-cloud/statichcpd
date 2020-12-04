@@ -230,7 +230,7 @@ class Message(dpkt.Packet):
                 return b''
             l = []
             for t, data in self.opts:
-                l.append(struct.pack("BB%is"%len(data), t, len(data), data))
+                l.append(struct.pack(">HH%is"%len(data), t, len(data), data))
             l.append(b'\xff')
             return b''.join(l)
 
