@@ -42,7 +42,54 @@ def construct_dhcp6_packet(msg: (Message.ClientServerDHCP6, Message.RelayServerD
                                          xid=msg.xid,
                                          opts=opt_list
                                         )
-               
+
+DEFAULT_T1 = 60
+DEFAULT_T2 = 60
+DEFAULT_PREF_LIFETIME = 60
+DEFAULT_VALID_LIFETIME = 60
+
+def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, data: List[Tuple]) -> bytes:
+    ia_na_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_NA) # There could be multiple IA_NA options
+    encoded_value = b'' 
+    # If the IA address mentioned in client request is different from what we have 
+    # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
+    for requested_na in ia_na_opts:
+        requested_id = hex(struct.unpack(">I", requested_na[:4])[0])
+        addr6_list = [val[1] for val in data if val[0] ==  requested_id] # Returns a list of addresses confgd for this ID
+            
+        encoded_value += requested_na[:4]
+
+        (t1,t2) = struct.unpack(">ii", requested_na[4:12])
+        if (t1 == t2 and t1 == 0) or t1 > t2 :
+            t1 = DEFAULT_T1
+            t2 = DEFAULT_T2
+
+        # For testing purpose, set t1 and t2 to low value
+        t1 = DEFAULT_T1
+        t2 = DEFAULT_T2
+        encoded_value += t1.to_bytes(4, 'big') + t2.to_bytes(4, 'big') 
+
+        if len(addr6_list) == 0:
+            status_code_val =  2 # No Address Available
+            encoded_value += struct.pack(">HHH", DHCP6_OPT_STATUS_CODE, 
+                                                 len(bytes(status_code_val)), status_code_val)
+            continue
+
+
+        if len(requested_na) > 12: # Len > 12 => TODO: options are present.. Anything to handle?
+            do_something = 1
+
+        pref_lifetime = DEFAULT_PREF_LIFETIME
+        valid_lifetime = DEFAULT_VALID_LIFETIME
+        iaddr_length = 24
+
+        logger.debug("Constructing IA_ADDR options with the following data: %s", addr6_list)
+        for addr in addr6_list:
+            encoded_value += struct.pack(">HH", DHCP6_OPT_IAADDR, iaddr_length) + addr.packed + \
+                                   pref_lifetime.to_bytes(4, 'big') + valid_lifetime.to_bytes(4, 'big')
+            # TODO: Any possible IAADDR options to be added??
+
+    return encoded_value
 
 def append_mandatory_options(msg: Message.ClientServerDHCP6, opt_tuple: Tuple, 
                              server_duid: str, advertise_ip6: (IPv6Address, List[IPv6Address])) -> Tuple:
@@ -51,18 +98,6 @@ def append_mandatory_options(msg: Message.ClientServerDHCP6, opt_tuple: Tuple,
     rapid_commit = fetch_dhcp6_opt(msg, DHCP6_OPT_RAPID_COMMIT)
     if rapid_commit:
         opt_list.extend([(DHCP6_OPT_RAPID_COMMIT, rapid_commit)])
-    ia_na = fetch_dhcp6_opt(msg, DHCP6_OPT_IA_NA)
-    '''
-    if ia_na:
-        print("ia_na:", ia_na)
-        ia_id = ia_na[:4]
-        (t1,t2) = struct.unpack(">ii", ia_na[4:12])
-        if len(ia_na) > 12: # Len > 12 => options are present
-            do_something = 1
-        opt_list.extend([(DHCP6_OPT_IA_NA, struct.pack(">iiiHH16iii", ia_id,t1,t2,
-                                                       DHCP6_OPT_IAADDR, 24, advertise_ip6, 60, 60))]) 
-    '''                                                       
-    ia_ta = fetch_dhcp6_opt(msg, DHCP6_OPT_IA_NA)
     # TODO:
     # Add support for server preference and reconfigure
     # The server preference value MUST default to zero unless otherwise
@@ -76,14 +111,16 @@ def append_mandatory_options(msg: Message.ClientServerDHCP6, opt_tuple: Tuple,
                      (DHCP6_OPT_CLIENTID, client_duid)])
     return tuple(opt_list)
 
-def construct_dhcp6_opt_list(request_list_opt: List[int], ifname: str, 
+def construct_dhcp6_opt_list(msg: Message.ClientServerDHCP6,
+                             request_list_opt: List[int], ifname: str, 
                              host_conf_data: Dict[str, str]) -> Tuple:
     opt_list = []
     if request_list_opt ==  None:
         logger.debug("No parameter request list")
         return tuple(opt_list)
-    for opcode in request_list_opt:
-        if opcode in host_conf_data:       # For every option value, do the appropriate encoding
+    other_msg_opts = [ele[0] for ele in msg.opts] 
+    for opcode in host_conf_data:
+        if opcode in request_list_opt or opcode in other_msg_opts:  # For every option value, do the appropriate encoding
             data = host_conf_data[opcode]
             encoded_data = None
             if isinstance(data, IPv6Address):
@@ -99,6 +136,15 @@ def construct_dhcp6_opt_list(request_list_opt: List[int], ifname: str,
                     encoded_data = b''.join([elem.packed for elem in data])
                 elif all(isinstance(ele, str) for ele in data):
                     encoded_data = b''.join([elem.encode('utf-8') for elem in data])
+                elif all(isinstance(ele, tuple) for ele in data): # Case of IA_NA or IA_TA values
+                    if opcode == DHCP6_OPT_IA_NA: 
+                        encoded_data = construct_ia_na_response_data(msg, data)
+                    elif opcode == DHCP6_OPT_IA_TA:
+                        encoded_data = construct_ia_ta_response_data(msg, data)
+                    else:
+                        logger.error("Configuration data for opcode %d "
+                                     " has unexpected values %s of type List of Tuples", 
+                                     data, opcode)
                 else:
                     logger.error("Elements of unexpected datatype "
                                  "in the client parameter list: %s", data)
@@ -110,7 +156,7 @@ def construct_dhcp6_opt_list(request_list_opt: List[int], ifname: str,
 def construct_dhcp_adv(ifname: str, msg: Message.ClientServerDHCP6, 
                        advertise_ip6: (IPv6Address, List[IPv6Address]), request_list_opt: List[int], 
                        host_conf_data: Dict[str, str]) -> Message.ClientServerDHCP6:
-    opt_list = construct_dhcp6_opt_list(request_list_opt, ifname, host_conf_data)
+    opt_list = construct_dhcp6_opt_list(msg, request_list_opt, ifname, host_conf_data)
     if advertise_ip6 is None and not opt_list: # If no other parameters were requested by client, should offer be sent?
         return None
     # What should be the format of server duid from configuration??? Just take ll address?
@@ -173,7 +219,6 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Optional
                       dhcp6_type_to_str(dhcp_response.mtype),
                       ifname, client_mac)
         return None
-
     data = bytes(dhcp_response)
     '''
     addr = fetch_destination_address(payload)

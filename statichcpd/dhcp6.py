@@ -369,4 +369,16 @@ def fetch_dhcp6_opt(dhcp6_msg: (Message.ClientServerDHCP6, Message.RelayServerDH
                  opt, dhcp6_type_to_str(mtype))
     return None
 
+def fetch_all_dhcp6_opt(dhcp6_msg: (Message.ClientServerDHCP6, Message.RelayServerDHCP6), opt: int) -> Any:
+    vals = []
+    for t, data in dhcp6_msg.opts:
+        if t == opt:
+            vals.extend([data])
+    if vals is []:
+        mtype = dhcp6_msg.mtype
+        logger.debug("Optcode %d not set in %s message",
+                 opt, dhcp6_type_to_str(mtype))
+    return vals
+
+
 

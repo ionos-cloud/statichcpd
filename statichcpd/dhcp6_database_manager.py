@@ -47,7 +47,7 @@ class dtype(Enum):
     INT16 = 3
     INT32 = 4
     STRING = 5
-    STATICRT = 6
+    IA = 6
 
 def insert_data_from(csv_filename: str) -> None:
     cursor = dhcp6_db_conn.cursor()
@@ -135,8 +135,9 @@ def fetch_v6host_conf_data(ifname: str, duid: Mac) -> Dict[str,Any]:
                 result[opcode] = []
             if datatype is dtype.IPV6:
                 result[opcode].append(IPv6Address(value))
-            elif datatype is dtype.STATICRT:
-                result[opcode].append(Staticrt(value))
+            elif datatype is dtype.IA:
+                ia_id, ia_addr = value.split(',')
+                result[opcode].extend([(ia_id.strip(), IPv6Address(ia_addr.strip()))])
             elif datatype is dtype.STRING:
                 result[opcode].append(value)
             else:

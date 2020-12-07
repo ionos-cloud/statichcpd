@@ -442,6 +442,13 @@ def start_server():
                         if isv4:
                             try:
                                 msg, (ifname, ethproto, pkttype, arphrd, rawmac) = intf_sock.recvfrom(1024)
+                            except OSError as err:
+                                logger.error("Error %s receiving packet on %s. "
+                                             " Stop servicing interface.", err, ifname)
+                                deactivate_and_stop_polling(poller_obj, ifcache_entry)
+                                ifcache.delete(ifcache_entry)
+                                continue
+                            try:
                                 eth = dpkt.ethernet.Ethernet(msg)
                                 if not isinstance(eth.data, dpkt.ip.IP):
                                     continue
@@ -452,11 +459,8 @@ def start_server():
 
                                 udp = ip.data
                                 dh = dpkt.dhcp.DHCP(udp.data)
-                            except OSError as err:
-                                logger.error("Error %s receiving packet on %s. "
-                                             " Stop servicing interface.", err, ifname)
-                                deactivate_and_stop_polling(poller_obj, ifcache_entry)
-                                ifcache.delete(ifcache_entry)
+                            except (OSError, dpkt.NeedData) as err:
+                                logger.error("Error %s receiving packet on %s. ", err, ifname)
                                 continue
                             src_mac = Mac(eth.src)
                             server_ip = ifcache_entry.ip
