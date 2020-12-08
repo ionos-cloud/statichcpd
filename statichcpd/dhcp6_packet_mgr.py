@@ -35,7 +35,7 @@ class DUID(Enum):
     lladdr = 3
 
 def construct_dhcp6_packet(msg: (Message.ClientServerDHCP6, Message.RelayServerDHCP6), msg_type: int,
-                           ip6: IPv6Address, opt_list: Tuple) -> (Message.ClientServerDHCP6, Message.RelayServerDHCP6):
+                           opt_list: Tuple) -> (Message.ClientServerDHCP6, Message.RelayServerDHCP6):
     if isinstance(msg, Message.ClientServerDHCP6):
         return Message.ClientServerDHCP6(
                                          mtype=msg_type,
@@ -58,8 +58,8 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, conf_data: Lis
     # For each requested IA_NA option, find a corresponding configuration with that IA_ID
     for requested_na in ia_na_opts:
         requested_id = hex(struct.unpack(">I", requested_na[:4])[0])
-        print("Reqstd ID: ",requested_id)
-        print("conf_data: ",conf_data)
+        logger.debug("IA_NA requested for ID: %s",requested_id)
+        logger.debug("Available IA_NA configurations for the client: %s",conf_data)
         addr6_list = [val[1] for val in conf_data if val[0] ==  requested_id] # Returns a list of addresses confgd for this ID
             
         encoded_value += requested_na[:4] # The IA_NA value starts with IA_ID
@@ -131,7 +131,7 @@ def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6, conf_data: Lis
 
 
 def append_mandatory_options(msg: Message.ClientServerDHCP6, opt_tuple: Tuple, 
-                             server_duid: str, advertise_ip6: (IPv6Address, List[IPv6Address])) -> Tuple:
+                             server_duid: str) -> Tuple:
     opt_list = list(opt_tuple)
     client_duid = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
     rapid_commit = fetch_dhcp6_opt(msg, DHCP6_OPT_RAPID_COMMIT)
@@ -194,23 +194,25 @@ def construct_dhcp6_opt_list(msg: Message.ClientServerDHCP6,
     return tuple(opt_list)
 
 def construct_dhcp_adv(ifname: str, msg: Message.ClientServerDHCP6, 
-                       advertise_ip6: (IPv6Address, List[IPv6Address]), request_list_opt: List[int], 
+                       request_list_opt: List[int], 
                        host_conf_data: Dict[str, str]) -> Message.ClientServerDHCP6:
     opt_list = construct_dhcp6_opt_list(msg, request_list_opt, ifname, host_conf_data)
-    if advertise_ip6 is None and not opt_list: # If no other parameters were requested by client, should offer be sent?
+    if not opt_list: # If no other parameters were requested by client, should offer be sent?
         return None
     # What should be the format of server duid from configuration??? Just take ll address?
-    opt_list = append_mandatory_options(msg, opt_list, "315a2a9a2a5aea", advertise_ip6)#, server_duid)
-    return construct_dhcp6_packet(msg, ADVERTISE, advertise_ip6, opt_list)
+    opt_list = append_mandatory_options(msg, opt_list, "315a2a9a2a5aea")#, server_duid)
+    return construct_dhcp6_packet(msg, ADVERTISE, opt_list)
 
 
 def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Optional[bytes]:
     rapid_commit = fetch_dhcp6_opt(msg, DHCP6_OPT_RAPID_COMMIT)
     request_list_bytestr = fetch_dhcp6_opt(msg, DHCP6_OPT_ORO)
-    request_list_opts = struct.unpack('>%iH'%(len(request_list_bytestr)/2), request_list_bytestr)
+    request_list_opts = struct.unpack('>%iH'%(len(request_list_bytestr)/2), request_list_bytestr) \
+                        if request_list_bytestr is not None else []
     client_duid = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
     
     # First two bytes of the DUID represent the DUID type
+    # Validation has confirmed that DHCP6_OPT_CLIENTID is set
     duid_type = struct.unpack('>H', client_duid[:2])[0]
 
     # Client ID in database is expected to be of the form : DUID_Type + Hardware_Type + LL_Addr
@@ -240,18 +242,11 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Optional
         logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", client_id, ifname)
         return None
 
-
-    advertise_ip6 = None
-    if DHCP_IPV6_OPCODE in host_conf_data:
-        logger.debug("Found an IPv6 configuration")
-        advertise_ip6 = host_conf_data[DHCP_IPV6_OPCODE]
-        logger.debug("Constructing DHCP Advertise message with IPv6: %s ", advertise_ip6)
-
     if rapid_commit:
         do_nothing = 1
-        #dhcp_response = construct_dhcp_reply(ifname, msg, advertise_ip6, request_list_opts, host_conf_data)
+        #dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data)
     else:
-        dhcp_response = construct_dhcp_adv(ifname, msg, advertise_ip6, request_list_opts, host_conf_data)
+        dhcp_response = construct_dhcp_adv(ifname, msg, request_list_opts, host_conf_data)
 
     if not dhcp_response:
         logger.error("Error constructing DHCP6 %s packet "
