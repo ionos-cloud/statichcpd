@@ -136,8 +136,11 @@ def fetch_v6host_conf_data(ifname: str, duid: Mac) -> Dict[str,Any]:
             if datatype is dtype.IPV6:
                 result[opcode].append(IPv6Address(value))
             elif datatype is dtype.IA:
-                ia_id, ia_addr = value.split(',')
-                result[opcode].extend([(ia_id.strip(), IPv6Address(ia_addr.strip()))])
+                try:
+                    ia_id, ia_addr = value.split(',')
+                    result[opcode].extend([(ia_id.strip(), IPv6Address(ia_addr.strip()))])
+                except ValueError:
+                    result[opcode].append(IPv6Address(value))
             elif datatype is dtype.STRING:
                 result[opcode].append(value)
             else:

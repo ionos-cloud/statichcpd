@@ -11,9 +11,17 @@ from .dhcp6_database_manager import *
 from .logmgr import logger
 from .dhcp6 import *
 
+use_mac_as_duid = False
+disable_ia_id = False
+
+def init(config: SectionProxy) -> None:
+    global use_mac_as_duid, disable_ia_id
+    use_mac_as_duid = config.get('use_mac_as_client_duid', 'False')
+    disable_ia_id = config.get('disable_ia_id', 'False')
+ 
 # Message Validation: RFC 3315 Section 15
 
-def validate_msg(msg: (Message.ClientServerDHCP6, Message.RelayServerDHCP6)) -> bool:
+def validate_msg(msg: Union[Message.ClientServerDHCP6, Message.RelayServerDHCP6]) -> bool:
     if msg.mtype in [SOLICIT, CONFIRM, REBIND] :
         return fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID) and \
                not fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID)
@@ -34,8 +42,8 @@ class DUID(Enum):
     enterprise_num = 2
     lladdr = 3
 
-def construct_dhcp6_packet(msg: (Message.ClientServerDHCP6, Message.RelayServerDHCP6), msg_type: int,
-                           opt_list: Tuple) -> (Message.ClientServerDHCP6, Message.RelayServerDHCP6):
+def construct_dhcp6_packet(msg: Union[Message.ClientServerDHCP6, Message.RelayServerDHCP6], msg_type: int,
+                           opt_list: Tuple) -> Union[Message.ClientServerDHCP6, Message.RelayServerDHCP6]:
     if isinstance(msg, Message.ClientServerDHCP6):
         return Message.ClientServerDHCP6(
                                          mtype=msg_type,
@@ -49,7 +57,7 @@ DEFAULT_PREF_LIFETIME = 60
 DEFAULT_VALID_LIFETIME = 60
 DEFAULT_IAADDR_LEN = 24
 
-def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, conf_data: List[Tuple]) -> bytes:
+def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, conf_data: List[Union[IPv6Address, Tuple]]) -> bytes:
     ia_na_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_NA) # There could be multiple IA_NA options
     encoded_value = b'' 
 
@@ -58,8 +66,14 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, conf_data: Lis
         requested_id = hex(struct.unpack(">I", requested_na[:4])[0])
         logger.debug("IA_NA requested for ID: %s",requested_id)
         logger.debug("Available IA_NA configurations for the client: %s",conf_data)
-        configured_addr6_list = [val[1] for val in \
-                                conf_data if val[0] ==  requested_id] # Returns a list of addresses confgd for this ID
+        if disable_ia_id:
+            # Ignore IAID values and return all addresses associated with this client
+            # When disable_ia_id is set, conf_data is expected to be List[IPv6Address]
+            configured_addr6_list = conf_data
+        else:
+            # Consider only the set of addresses that have the same ID
+            configured_addr6_list = [val[1] for val in \
+                                conf_data if val[0] ==  requested_id]
             
         encoded_value += requested_na[:4] # The IA_NA value starts with IA_ID
 
@@ -95,10 +109,10 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, conf_data: Lis
                 # Next offset is at offset + sizeof(opcode) + sizeof(option-len) + option-len
                 offset += (2 + 2 + struct.unpack(">H", requested_na[offset+2:offset+4])[0])
             logger.debug("Requested list of IAADDRs is %s", requested_addr_list)
-            expired_addresses = [addr for addr in requested_addr_list if addr not in configured_addr6_list]
-            logger.debug("Expired address list: %s", expired_addresses)
             # For request msgs, if the IA address mentioned in client request is different from what we have 
             # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
+            expired_addresses = [addr for addr in requested_addr_list if addr not in configured_addr6_list]
+            logger.debug("Expired address list: %s", expired_addresses)
             for addr in expired_addresses:
                 pref_lifetime = 0
                 valid_lifetime = 0
@@ -119,15 +133,20 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, conf_data: Lis
 
     return encoded_value
 
-def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6, conf_data: List[Tuple]) -> bytes:
+def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6, conf_data: List[Union[IPv6Address, Tuple]]) -> bytes:
     ia_ta_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_TA) # There could be multiple IA_NA options
     encoded_value = b'' 
 
     # For each requested IA_TA option, find a corresponding configuration with that IA_ID
     for requested_ta in ia_ta_opts:
         requested_id = hex(struct.unpack(">I", requested_ta[:4])[0])
-        configured_addr6_list = [val[1] for val in conf_data if val[0] ==  requested_id] # Returns a list of addresses confgd for this ID
-            
+        if disable_ia_id:
+            # Ignore IAID values and return all addresses associated with this client
+            # When disable_ia_id is set, conf_data is expected to be List[IPv6Address]
+            configured_addr6_list = conf_data
+        else:
+            # Consider only the set of addresses that have the same ID
+            configured_addr6_list = [val[1] for val in conf_data if val[0] ==  requested_id]            
         encoded_value += requested_ta[:4] # The IA_NA value starts with IA_ID
 
         if len(configured_addr6_list) == 0:
@@ -166,10 +185,11 @@ def append_mandatory_options(msg: Message.ClientServerDHCP6, opt_tuple: Tuple,
     # configured by the server administrator.
     # If the Relay-forward messages included an Interface-id option, the server copies that
     # option to the Relay-reply message.
-    opt_list.extend([(DHCP6_OPT_SERVERID, struct.pack(">HH%is"%(len(server_duid[2:])/2), 
-                                                                int(server_duid[0]), 
-                                                                int(server_duid[1]), 
-                                                                binascii.unhexlify(server_duid[2:]))), # Find a proper encoding of duid
+    # opt_list.extend([(DHCP6_OPT_SERVERID, struct.pack(">HH%is"%(len(server_duid[2:])/2), 
+    #                                                            int(server_duid[0]), 
+    #                                                            int(server_duid[1]), 
+    #                                                            binascii.unhexlify(server_duid[2:]))), # Find a proper encoding of duid
+    opt_list.extend([(DHCP6_OPT_SERVERID, server_duid),
                      (DHCP6_OPT_CLIENTID, client_duid)])
     return tuple(opt_list)
 
@@ -195,7 +215,13 @@ def construct_dhcp6_opt_list(msg: Message.ClientServerDHCP6,
                 encoded_data = (data.value).to_bytes(4, 'big')
             elif isinstance(data, list) and len(data) > 0:
                 if all(isinstance(ele, IPv6Address) for ele in data):
-                    encoded_data = b''.join([elem.packed for elem in data])
+                    if opcode == DHCP6_OPT_IA_NA: 
+                        encoded_data = construct_ia_na_response_data(msg, data)
+                    elif opcode == DHCP6_OPT_IA_TA:
+                        encoded_data = construct_ia_ta_response_data(msg, data)
+                        #TODO: Add code to handle IA_PREFIX option as well
+                    else:
+                        encoded_data = b''.join([elem.packed for elem in data])
                 elif all(isinstance(ele, str) for ele in data):
                     encoded_data = b''.join([elem.encode('utf-8') for elem in data])
                 elif all(isinstance(ele, tuple) for ele in data): # Case of IA_NA or IA_TA values
@@ -203,14 +229,16 @@ def construct_dhcp6_opt_list(msg: Message.ClientServerDHCP6,
                         encoded_data = construct_ia_na_response_data(msg, data)
                     elif opcode == DHCP6_OPT_IA_TA:
                         encoded_data = construct_ia_ta_response_data(msg, data)
-                        # Add code to handle IA_PREFIX option as well
+                        #TODO:Add code to handle IA_PREFIX option as well
                     else:
                         logger.error("Configuration data for opcode %d "
                                      " has unexpected values %s of type List of Tuples", 
                                      data, opcode)
+                        continue
                 else:
                     logger.error("Elements of unexpected datatype "
                                  "in the client parameter list: %s", data)
+                    continue
             else:
                 logger.error("Value(%s) of unexpected type received for opcode %d".format(data, opcode))
             opt_list.append((opcode, encoded_data))
@@ -218,22 +246,24 @@ def construct_dhcp6_opt_list(msg: Message.ClientServerDHCP6,
 
 def construct_dhcp_reply(ifname: str, msg: Message.ClientServerDHCP6, 
                        request_list_opt: List[int], 
-                       host_conf_data: Dict[str, str]) -> Message.ClientServerDHCP6:
+                       host_conf_data: Dict[str, str],
+                       server_duid: str) -> Message.ClientServerDHCP6:
     opt_list = construct_dhcp6_opt_list(msg, request_list_opt, ifname, host_conf_data)
     if not opt_list: # If no other parameters were requested by client, should offer be sent?
         return None
     # What should be the format of server duid from configuration??? Just take ll address?
-    opt_list = append_mandatory_options(msg, opt_list, "315a2a9a2a5aea")#, server_duid)
+    opt_list = append_mandatory_options(msg, opt_list, server_duid)
     return construct_dhcp6_packet(msg, REPLY, opt_list)
 
 def construct_dhcp_adv(ifname: str, msg: Message.ClientServerDHCP6, 
                        request_list_opt: List[int], 
-                       host_conf_data: Dict[str, str]) -> Message.ClientServerDHCP6:
+                       host_conf_data: Dict[str, str],
+                       server_duid: str) -> Message.ClientServerDHCP6:
     opt_list = construct_dhcp6_opt_list(msg, request_list_opt, ifname, host_conf_data)
     if not opt_list: # If no other parameters were requested by client, should offer be sent?
         return None
     # What should be the format of server duid from configuration??? Just take ll address?
-    opt_list = append_mandatory_options(msg, opt_list, "315a2a9a2a5aea")#, server_duid)
+    opt_list = append_mandatory_options(msg, opt_list, server_duid)
     return construct_dhcp6_packet(msg, ADVERTISE, opt_list)
 
 def fetch_client_duid(client_duid: str) -> str:
@@ -261,14 +291,17 @@ def fetch_client_duid(client_duid: str) -> str:
                     client_duid[6:]  # Should the value be stored as int or hex in DB?
     return client_id
 
-def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Optional[bytes]:
+def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid: str, src_mac: Mac) -> Optional[bytes]:
     rapid_commit = fetch_dhcp6_opt(msg, DHCP6_OPT_RAPID_COMMIT)
     request_list_bytestr = fetch_dhcp6_opt(msg, DHCP6_OPT_ORO)
     request_list_opts = struct.unpack('>%iH'%(len(request_list_bytestr)/2), request_list_bytestr) \
                         if request_list_bytestr is not None else []
     client_duid = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
     
-    client_id = fetch_client_duid(client_duid)
+    if use_mac_as_duid:
+        client_id = src_mac
+    else:
+        client_id = fetch_client_duid(client_duid)
     logger.debug("Client ID received: %s", client_id)
 
     
@@ -279,9 +312,9 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Optional
 
     if rapid_commit:
         do_nothing = 1
-        #dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data)
+        #dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid)
     else:
-        dhcp_response = construct_dhcp_adv(ifname, msg, request_list_opts, host_conf_data)
+        dhcp_response = construct_dhcp_adv(ifname, msg, request_list_opts, host_conf_data, server_duid)
 
     if not dhcp_response:
         logger.error("Error constructing DHCP6 %s packet "
@@ -292,15 +325,18 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Optional
     data = bytes(dhcp_response)
     return data
 
-def process_request_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Optional[bytes]:
+def process_request_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid: str, src_mac: Mac) -> Optional[bytes]:
     client_duid = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
     # TODO: If it's unicast and unicast is not supported for this client,
     #       send back Status code UseMulticast
     request_list_bytestr = fetch_dhcp6_opt(msg, DHCP6_OPT_ORO)
     request_list_opts = struct.unpack('>%iH'%(len(request_list_bytestr)/2), request_list_bytestr) \
                         if request_list_bytestr is not None else []
-    
-    client_id = fetch_client_duid(client_duid)
+   
+    if use_mac_as_duid:
+        client_id = src_mac
+    else:
+        client_id = fetch_client_duid(client_duid)
     logger.debug("Client ID received: %s", client_id)
     
     host_conf_data = fetch_v6host_conf_data(ifname, client_id)
@@ -308,7 +344,7 @@ def process_request_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Optional
         logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", client_id, ifname)
         return None
 
-    dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data)
+    dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid)
 
     if not dhcp_response:
         logger.error("Error constructing DHCP6 %s packet "
@@ -320,7 +356,7 @@ def process_request_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Optional
     return data
 
 
-def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Optional[bytes]:
+def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid: str, src_mac: Mac) -> Optional[bytes]:
     client_id = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
     valid_msg = validate_msg(msg)
     if not valid_msg:
@@ -337,9 +373,9 @@ def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Op
                 client_id)
 
     if msg.mtype is SOLICIT:
-        return process_solicit_msg(ifname, msg)
+        return process_solicit_msg(ifname, msg, server_duid, src_mac)
     if msg.mtype is REQUEST:
-        return process_request_msg(ifname, msg)
+        return process_request_msg(ifname, msg, server_duid, src_mac)
     '''
     if msg.mtype is CONFIRM:
         return process_confirm_msg(ifname, payload)
@@ -356,18 +392,19 @@ def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6) -> Op
     '''
     return None
 
-def process_relay_server_msg(ifname: str, payload: Message.RelayServerDHCP6) -> Optional[bytes]:
+def process_relay_server_msg(ifname: str, payload: Message.RelayServerDHCP6, server_duid: str, src_mac: Mac) -> Optional[bytes]:
     logger.debug("Received a relay server message of type %s", dhcp6_type_to_str(payload.mtype))
     if msg.mtype is RELAYFORW:
         return process_relayforw_msg(ifname, payload)
     return None
 
-def process_dhcp6_packet(ifname: str, dhcp6_msg: Message, server_mac: Mac) -> Optional[bytes]:
+def process_dhcp6_packet(ifname: str, dhcp6_msg: Message, server_mac: Mac, src_mac: Mac) -> Optional[bytes]:
     payload = dhcp6_msg.data
+    server_duid = struct.pack(">HH", 3, 1) + (str(server_mac).replace(":","")).encode('utf-8')
     if isinstance(payload, Message.ClientServerDHCP6):
-        pkt = process_client_server_msg(ifname, payload)
+        pkt = process_client_server_msg(ifname, payload, server_duid, src_mac)
     elif isinstance(payload, Message.RelayServerDHCP6):
-        pkt = process_relay_server_msg(ifname, payload)
+        pkt = process_relay_server_msg(ifname, payload, server_duid, src_mac)
     else:
         logger.error("Malformed packet with unknown DHCP msg type %d received", type(payload))
         pkt = None

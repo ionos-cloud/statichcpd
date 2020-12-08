@@ -8,7 +8,7 @@ from pyroute2.netlink.rtnl.ifaddrmsg import ifaddrmsg
 import socket
 from logging import Logger
 from typing import Dict, List, Any, Tuple, TypeVar, Optional
-from ipaddress import AddressValueError
+from ipaddress import AddressValueError, IPv6Address
 from dpkt import dhcp
 import re
 from configparser import SectionProxy
@@ -50,12 +50,15 @@ def get_mac_address(ifname: str) -> Optional[Mac]:
 # OR has a valid IP address configured. At any point, if the interface state
 # becomes down and IP is also deleted, the entry will get erased
 
+# The server uses common raw socket for receiving both DHCPv4 and DHCPv6 packets
+# A global UDP socket is used for DHCPv4 unicasts and an interface specific UDP socket
+# is used for DHCPv6 replies
+
 class InterfaceCacheEntry():
     def __init__(self, ifname, idx):
-        self.v4fd = None
-        self.v6fd = None
-        self.v4sock = None
-        self.v6sock = None
+        self.raw_fd = None
+        self.rawsock = None
+        self.v6_txsock = None
         self.ifname = ifname
         self.ip = None
         self.ip6 = None
@@ -76,10 +79,8 @@ class InterfaceCache(object):
 
     def delete(self, entry):
         logger.debug("Deleting cache entry for %s", entry.ifname)
-        if entry.v4fd is not None: # Access using fd will be availabe only after activation
-            del self._by_fd[entry.v4fd]
-        if entry.v6fd is not None: # Access using fd will be availabe only after activation
-            del self._by_fd[entry.v6fd]
+        if entry.raw_fd is not None: # Access using fd will be availabe only after activation
+            del self._by_fd[entry.raw_fd]
         del self._by_ifname[entry.ifname]
 
     def fetch_ifcache_by_fd(self, fd):
@@ -88,28 +89,24 @@ class InterfaceCache(object):
     def fetch_ifcache_by_ifname(self, ifname):
         return self._by_ifname.get(ifname)
 
-    def activate(self, entry, v4sock, v6sock):
-        if v4sock:
-            entry.v4sock = v4sock
-            entry.v4fd =  v4sock.fileno()
-            self._by_fd[entry.v4fd] = entry
-        if v6sock:
-            entry.v6sock = v6sock
-            entry.v6fd =  v6sock.fileno()
-            self._by_fd[entry.v6fd] = entry
+    def activate(self, entry, rawsock, v6_txsock):
+        if rawsock:
+            entry.rawsock = rawsock
+            entry.raw_fd =  rawsock.fileno()
+            self._by_fd[entry.raw_fd] = entry
+        if v6_txsock:
+            entry.v6_txsock = v6_txsock
         self._by_ifname[entry.ifname] =  entry
 
     def deactivate(self, entry):
-        if entry.v4sock:
-            entry.v4sock.close()
-        if entry.v6sock:
-            entry.v6sock.close()
-        entry.v4sock = None
-        entry.v6sock = None
-        entry.v4fd =  None
-        entry.v6fd =  None
-        #self._by_fd[entry.v4fd] = entry
-        #self._by_fd[entry.v6fd] = entry
+        if entry.rawsock:
+            entry.rawsock.close()
+        if entry.v6_txsock:
+            entry.v6_txsock.close()
+        entry.rawsock = None
+        entry.v6_txsock = None
+        entry.raw_fd =  None
+        #self._by_fd[entry.raw_fd] = entry
         self._by_ifname[entry.ifname] =  entry
 
 
@@ -120,33 +117,36 @@ def is_served_intf(ifname: str) -> bool:
 
 
 #Filter on port 67 generated using the following command:
-#sudo tcpdump -p -i lo -dd -s 1024 'inbound and (port 67)' | sed -e 's/{ /(/' -e 's/ }/)/'
+#sudo tcpdump -p -i lo -dd -s 1024 'inbound and (port 67 or port 547)' | sed -e 's/{ /(/' -e 's/ }/)/'
 
 dhcp_filter_list = [
 (0x28, 0, 0, 0xfffff004),
-(0x15, 23, 0, 0x00000004),
+(0x15, 26, 0, 0x00000004),
 (0x28, 0, 0, 0x0000000c),
-(0x15, 0, 8, 0x000086dd),
+(0x15, 0, 9, 0x000086dd),
 (0x30, 0, 0, 0x00000014),
 (0x15, 2, 0, 0x00000084),
 (0x15, 1, 0, 0x00000006),
-(0x15, 0, 17, 0x00000011),
+(0x15, 0, 20, 0x00000011),
 (0x28, 0, 0, 0x00000036),
-(0x15, 14, 0, 0x00000043),
+(0x15, 17, 0, 0x00000043),
+(0x15, 16, 0, 0x00000223),
 (0x28, 0, 0, 0x00000038),
-(0x15, 12, 13, 0x00000043),
-(0x15, 0, 12, 0x00000800),
+(0x15, 14, 13, 0x00000043),
+(0x15, 0, 14, 0x00000800),
 (0x30, 0, 0, 0x00000017),
 (0x15, 2, 0, 0x00000084),
 (0x15, 1, 0, 0x00000006),
-(0x15, 0, 8, 0x00000011),
+(0x15, 0, 10, 0x00000011),
 (0x28, 0, 0, 0x00000014),
-(0x45, 6, 0, 0x00001fff),
+(0x45, 8, 0, 0x00001fff),
 (0xb1, 0, 0, 0x0000000e),
 (0x48, 0, 0, 0x0000000e),
-(0x15, 2, 0, 0x00000043),
+(0x15, 4, 0, 0x00000043),
+(0x15, 3, 0, 0x00000223),
 (0x48, 0, 0, 0x00000010),
-(0x15, 0, 1, 0x00000043),
+(0x15, 1, 0, 0x00000043),
+(0x15, 0, 1, 0x00000223),
 (0x6, 0, 0, 0x00000400),
 (0x6, 0, 0, 0x00000000),
 ]
@@ -181,11 +181,10 @@ def add_v6sock_binding(ifname: str) -> Optional[socket.socket]:
         logger.error("Error %s binding the IPv6 UDP socket for %s", err, ifname)
         intf_sock.close()
         return None
-
     return intf_sock
 
 
-def add_v4sock_binding(ifname: str) -> Optional[socket.socket]:
+def add_rawsock_binding(ifname: str) -> Optional[socket.socket]:
     # Create a socket
     try:
         ETH_P_ALL = 3 # defined in linux/if_ether.h
@@ -227,37 +226,33 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
     ifname = ifcache_entry.ifname
 
     # Skip for already activated interface
-    if ifcache_entry.v4fd is not None and \
-       ifcache_entry.v6fd is not None:
+    if ifcache_entry.raw_fd is not None :
         logger.debug("Interface %s is already active. Skipping..", ifname)
         return
 
     # Create and bind a socket
-    intf_v4sock = ifcache_entry.v4sock if ifcache_entry.v4sock is not None else add_v4sock_binding(ifname)
-    if intf_v4sock is None:
+    intf_rawsock = ifcache_entry.rawsock if ifcache_entry.rawsock is not None else add_rawsock_binding(ifname)
+    if intf_rawsock is None:
         logger.error("Failed to add v4 socket binding for %s.", ifname)
 
-    intf_v6sock = ifcache_entry.v6sock if ifcache_entry.v6sock is not None else add_v6sock_binding(ifname)
+    intf_v6sock = ifcache_entry.v6_txsock if ifcache_entry.v6_txsock is not None else add_v6sock_binding(ifname)
     if intf_v6sock is None:
         logger.error("Failed to add socket binding for %s. ", ifname)
-
-    if intf_v6sock is None and intf_v4sock is None:
-        logger.error("Failed to open IPv4 and IPv6 sockets for interface %s."
+    
+    if intf_v6sock is None or intf_rawsock is None:
+        logger.error("Failed to open sockets for interface %s."
                      " Not servicing the interface.",
                        ifname)
         return
 
     # Activate the cache entry
-    ifcache.activate(ifcache_entry, intf_v4sock, intf_v6sock)
+    ifcache.activate(ifcache_entry, intf_rawsock, intf_v6sock)
 
     # Register with poller object
     try:
-        if intf_v4sock is not None:
-            logger.debug("Registering v4 fd: %d with poll", intf_v4sock.fileno())
-            poller_obj.register(intf_v4sock.fileno(), POLLIN)
-        if intf_v6sock is not None:
-            logger.debug("Registering v6 fd: %d with poll", intf_v6sock.fileno())
-            poller_obj.register(intf_v6sock.fileno(), POLLIN)
+        if intf_rawsock is not None:
+            logger.debug("Registering raw socket fd: %d with poll", intf_rawsock.fileno())
+            poller_obj.register(intf_rawsock.fileno(), POLLIN)
         logger.info("Start servicing the interface %s", ifname)
     except AttributeError as err:
         logger.error("Error %s registering %s for service", err, ifname)
@@ -272,17 +267,14 @@ def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheE
 
     # Skip already deactivated entries
     if ifcache_entry is None or \
-       (ifcache_entry.v4fd is None and ifcache_entry.v6fd is None):
+       ifcache_entry.raw_fd is None :
 	       logger.debug("Ignoring non-registered intf: %s", ifname)
 	       return
 
     try:
-        if ifcache_entry.v4fd is not None:
-            poller_obj.unregister(ifcache_entry.v4fd)
-            logger.info("Stop servicing interface %s (v4 fd: %d)", ifname, ifcache_entry.v4fd)
-        if ifcache_entry.v6fd is not None:
-            poller_obj.unregister(ifcache_entry.v6fd)
-            logger.info("Stop servicing interface %s (v6 fd: %d)", ifname, ifcache_entry.v6fd)
+        if ifcache_entry.raw_fd is not None:
+            poller_obj.unregister(ifcache_entry.raw_fd)
+            logger.info("Stop servicing interface %s (raw socket fd: %d)", ifname, ifcache_entry.raw_fd)
     except KeyError as err:
         logger.error("Error %s deregistering %s from service", err, ifname)
         return
@@ -370,15 +362,14 @@ def start_server():
         logger.debug("Registered Netlink socket for polling...")
 
         try:
-            tx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            tx_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            tx_sock.bind(('', 67))
+            v4_tx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            v4_tx_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            v4_tx_sock.bind(('', 67))
         except OSError as err:
             logger.error("Error %s opening IPv4 UDP socket for unicast replies", err)
-            if tx_sock is not None:
-                tx_sock.close()
+            if v4_tx_sock is not None:
+                v4_tx_sock.close()
             raise KeyboardInterrupt
-
 
     # 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
     #    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
@@ -426,38 +417,41 @@ def start_server():
                         if not ifcache_entry:
                             logger.error("Received packet on untracked interface file descriptor %d!", fd)
                             raise KeyboardInterrupt
-                        if fd == ifcache_entry.v4fd:
-                            intf_sock = ifcache_entry.v4sock
-                            isv4 = True
-                        else:
-                            intf_sock = ifcache_entry.v6sock
-                            isv4 = False
-                        
+
+                        intf_sock = ifcache_entry.rawsock
                         ifname = ifcache_entry.ifname
                         if intf_sock is None:
                             logger.error("Error finding a valid socket "
                                          "for interface %s and file descriptor %d",
                                          ifname, fd)
                             raise KeyboardInterrupt
+                        try:
+                            msg, (ifname, ethproto, pkttype, arphrd, rawmac) = intf_sock.recvfrom(1024)
+                        except OSError as err:
+                            logger.error("Error %s receiving packet on %s. "
+                                         " Stop servicing interface.", err, ifname)
+                            deactivate_and_stop_polling(poller_obj, ifcache_entry)
+                            ifcache.delete(ifcache_entry)
+                            continue
+                        try:
+                            eth = dpkt.ethernet.Ethernet(msg)
+                            isv4 = True
+                            if not isinstance(eth.data, dpkt.ip.IP):
+                                if not isinstance(eth.data, dpkt.ip6.IP6):
+                                    continue
+                                isv4 = False
+
+
+                            ip = eth.data
+                            if not isinstance(ip.data, dpkt.udp.UDP):
+                                continue
+
+                            udp = ip.data
+                        except OSError as err:
+                            logger.error("Error %s receiving packet on %s. ", err, ifname)
+                            continue
                         if isv4:
                             try:
-                                msg, (ifname, ethproto, pkttype, arphrd, rawmac) = intf_sock.recvfrom(1024)
-                            except OSError as err:
-                                logger.error("Error %s receiving packet on %s. "
-                                             " Stop servicing interface.", err, ifname)
-                                deactivate_and_stop_polling(poller_obj, ifcache_entry)
-                                ifcache.delete(ifcache_entry)
-                                continue
-                            try:
-                                eth = dpkt.ethernet.Ethernet(msg)
-                                if not isinstance(eth.data, dpkt.ip.IP):
-                                    continue
-
-                                ip = eth.data
-                                if not isinstance(ip.data, dpkt.udp.UDP):
-                                    continue
-
-                                udp = ip.data
                                 dh = dpkt.dhcp.DHCP(udp.data)
                             except (OSError, dpkt.NeedData) as err:
                                 logger.error("Error %s receiving packet on %s. ", err, ifname)
@@ -504,7 +498,7 @@ def start_server():
                                         logger.debug("Routing enabled: Unicast reply to %s", gw_address)
                                         pktinfo = pack('=I4s4s', 0, socket.inet_aton(str(server_id)),
                                                                     socket.inet_aton(str(destination_ip)))
-                                    tx_sock.sendmsg([dhcp_frame],
+                                    v4_tx_sock.sendmsg([dhcp_frame],
                                                     [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)],
                                                     0, (str(destination_ip), port))
                                     continue
@@ -517,23 +511,15 @@ def start_server():
 
                         # Case of IPv6 packet
                         try:
-                            msg, saddr = intf_sock.recvfrom(1024)
-                        except OSError as err:
-                            logger.error("Error %s receiving IPv6 packet on %s. "
-                                         " Stop servicing the interface.", err, ifname)
-                            deactivate_and_stop_polling(poller_obj, ifcache_entry)
-                            ifcache.delete(ifcache_entry)
-                            continue
-
-                        try:
-                            if len(msg) > 0:
-                                dhcp6_msg = Message(msg)
+                            if len(udp.data) > 0:
+                                dhcp6_msg = Message(udp.data)
                                 logger.debug(repr(dhcp6_msg))
-                                pkt = process_dhcp6_packet(ifname, dhcp6_msg, ifcache_entry.mac)
+                                pkt = process_dhcp6_packet(ifname, dhcp6_msg, ifcache_entry.mac, Mac(rawmac))
                                 if pkt is None:
                                     logger.debug("No DHCP6 response sent for packet on %s", ifname)
                                     continue
-                                intf_sock.sendto(pkt, (saddr[0], saddr[1]))
+                                destination_ip = str(IPv6Address(ip.src))
+                                ifcache_entry.v6_txsock.sendto(pkt, (destination_ip, udp.sport))
                         except OSError as err:
                             logger.error("Error %s sending packet on %s. "
                                          "Stop servicing the interface.", err, ifname)

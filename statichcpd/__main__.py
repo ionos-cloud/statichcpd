@@ -9,6 +9,7 @@ from . import database_manager
 from . import dhcp6_database_manager
 from . import dhcpserver
 from . import dhcp_packet_mgr
+from . import dhcp6_packet_mgr
 from pathlib import Path
 
 if __name__ == "__main__":
@@ -38,4 +39,5 @@ if __name__ == "__main__":
     dhcp6_database_manager.init(statichcpd_config)
     dhcpserver.init(statichcpd_config)
     dhcp_packet_mgr.init(statichcpd_config)
+    dhcp6_packet_mgr.init(statichcpd_config)
     start_server()
