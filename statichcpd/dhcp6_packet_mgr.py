@@ -47,17 +47,22 @@ DEFAULT_T1 = 60
 DEFAULT_T2 = 60
 DEFAULT_PREF_LIFETIME = 60
 DEFAULT_VALID_LIFETIME = 60
+DEFAULT_IAADDR_LEN = 24
 
-def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, data: List[Tuple]) -> bytes:
+def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, conf_data: List[Tuple]) -> bytes:
     ia_na_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_NA) # There could be multiple IA_NA options
     encoded_value = b'' 
-    # If the IA address mentioned in client request is different from what we have 
+    # TODO: If the IA address mentioned in client request is different from what we have 
     # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
+
+    # For each requested IA_NA option, find a corresponding configuration with that IA_ID
     for requested_na in ia_na_opts:
         requested_id = hex(struct.unpack(">I", requested_na[:4])[0])
-        addr6_list = [val[1] for val in data if val[0] ==  requested_id] # Returns a list of addresses confgd for this ID
+        print("Reqstd ID: ",requested_id)
+        print("conf_data: ",conf_data)
+        addr6_list = [val[1] for val in conf_data if val[0] ==  requested_id] # Returns a list of addresses confgd for this ID
             
-        encoded_value += requested_na[:4]
+        encoded_value += requested_na[:4] # The IA_NA value starts with IA_ID
 
         (t1,t2) = struct.unpack(">ii", requested_na[4:12])
         if (t1 == t2 and t1 == 0) or t1 > t2 :
@@ -67,10 +72,10 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, data: List[Tup
         # For testing purpose, set t1 and t2 to low value
         t1 = DEFAULT_T1
         t2 = DEFAULT_T2
-        encoded_value += t1.to_bytes(4, 'big') + t2.to_bytes(4, 'big') 
+        encoded_value += t1.to_bytes(4, 'big') + t2.to_bytes(4, 'big') # Append t1,t2 to the IA_NA value 
 
         if len(addr6_list) == 0:
-            status_code_val =  2 # No Address Available
+            status_code_val =  DHCP6_NoAddrsAvail
             encoded_value += struct.pack(">HHH", DHCP6_OPT_STATUS_CODE, 
                                                  len(bytes(status_code_val)), status_code_val)
             continue
@@ -81,15 +86,49 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, data: List[Tup
 
         pref_lifetime = DEFAULT_PREF_LIFETIME
         valid_lifetime = DEFAULT_VALID_LIFETIME
-        iaddr_length = 24
+        iaddr_length = DEFAULT_IAADDR_LEN
 
-        logger.debug("Constructing IA_ADDR options with the following data: %s", addr6_list)
+        logger.debug("Constructing IA_ADDR options for IA_NA with the following data: %s", addr6_list)
         for addr in addr6_list:
             encoded_value += struct.pack(">HH", DHCP6_OPT_IAADDR, iaddr_length) + addr.packed + \
                                    pref_lifetime.to_bytes(4, 'big') + valid_lifetime.to_bytes(4, 'big')
             # TODO: Any possible IAADDR options to be added??
 
     return encoded_value
+
+def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6, conf_data: List[Tuple]) -> bytes:
+    ia_ta_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_TA) # There could be multiple IA_NA options
+    encoded_value = b'' 
+
+    # For each requested IA_TA option, find a corresponding configuration with that IA_ID
+    for requested_ta in ia_ta_opts:
+        requested_id = hex(struct.unpack(">I", requested_ta[:4])[0])
+        addr6_list = [val[1] for val in conf_data if val[0] ==  requested_id] # Returns a list of addresses confgd for this ID
+            
+        encoded_value += requested_ta[:4] # The IA_NA value starts with IA_ID
+
+        if len(addr6_list) == 0:
+            status_code_val =  DHCP6_NoAddrsAvail
+            encoded_value += struct.pack(">HHH", DHCP6_OPT_STATUS_CODE, 
+                                                 len(bytes(status_code_val)), status_code_val)
+            continue
+
+
+        if len(requested_ta) > 4: # Len > 4 => TODO: options are present.. Anything to handle?
+            do_something = 1
+
+        pref_lifetime = DEFAULT_PREF_LIFETIME
+        valid_lifetime = DEFAULT_VALID_LIFETIME
+        iaddr_length = DEFAULT_IAADDR_LEN
+
+        logger.debug("Constructing IA_ADDR options for IA_TA with the following data: %s", addr6_list)
+        for addr in addr6_list:
+            encoded_value += struct.pack(">HH", DHCP6_OPT_IAADDR, iaddr_length) + addr.packed + \
+                                   pref_lifetime.to_bytes(4, 'big') + valid_lifetime.to_bytes(4, 'big')
+            # TODO: Any possible IAADDR options to be added??
+
+    return encoded_value
+
 
 def append_mandatory_options(msg: Message.ClientServerDHCP6, opt_tuple: Tuple, 
                              server_duid: str, advertise_ip6: (IPv6Address, List[IPv6Address])) -> Tuple:
@@ -141,6 +180,7 @@ def construct_dhcp6_opt_list(msg: Message.ClientServerDHCP6,
                         encoded_data = construct_ia_na_response_data(msg, data)
                     elif opcode == DHCP6_OPT_IA_TA:
                         encoded_data = construct_ia_ta_response_data(msg, data)
+                        # Add code to handle IA_PREFIX option as well
                     else:
                         logger.error("Configuration data for opcode %d "
                                      " has unexpected values %s of type List of Tuples", 

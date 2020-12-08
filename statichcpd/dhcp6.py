@@ -168,6 +168,14 @@ INFORMATIONREQUEST = 11
 RELAYFORW =  12
 RELAYREPL =  13
 
+# Status Codes: RFC 3315 Section 24.4
+
+DHCP6_Success = 0
+DHCP6_UnspecFail = 1
+DHCP6_NoAddrsAvail = 2
+DHCP6_NoBinding = 3
+DHCP6_NotOnLink = 4
+DHCP6_UseMulticast = 5
 
 # Message type dictionaries used for classifying packets and for prints
 
