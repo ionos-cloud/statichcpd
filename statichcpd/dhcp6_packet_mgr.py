@@ -168,17 +168,17 @@ def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6,
         if len(requested_ta) > 4: # Len > 4 => Options are present
             offset = 4
             requested_addr_list = []
-            while offset < len(requested_na):
-                op = struct.unpack(">H", requested_na[offset:offset+2])[0]
+            while offset < len(requested_ta):
+                op = struct.unpack(">H", requested_ta[offset:offset+2])[0]
                 if op == DHCP6_OPT_IAADDR:
                     try:
-                        requested_addr_list.extend([IPv6Address(requested_na[offset+4:offset+20])])
+                        requested_addr_list.extend([IPv6Address(requested_ta[offset+4:offset+20])])
                     except AddressValueError:
                         logger.error("Invalid IPv6 address in IAADDR option: %s", 
-                                                 requested_na[offset+4:offset+20])
+                                                 requested_ta[offset+4:offset+20])
                     # TODO: Should other IAADDR options be considered?
                 # Next offset is at offset + sizeof(opcode) + sizeof(option-len) + option-len
-                offset += (2 + 2 + struct.unpack(">H", requested_na[offset+2:offset+4])[0])
+                offset += (2 + 2 + struct.unpack(">H", requested_ta[offset+2:offset+4])[0])
             logger.debug("Requested list of temporary IAADDRs is %s", requested_addr_list)
             # For request msgs, if the IA address mentioned in client request is different from what we have 
             # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
@@ -254,20 +254,21 @@ def construct_ia_pd_response_data(msg: Message.ClientServerDHCP6,
                 op = struct.unpack(">H", requested_pd[offset:offset+2])[0]
                 if op == DHCP6_OPT_IAPREFIX:
                     try:
-                        prefix_len = str(struct.unpack(">B", requested_na[offset+4:offset+5])[0])
-                        network_addr = str(IPv6Address(requested_na[offset+5:offset+21]))
+                        # IAPREFIX structure: Opcode(2) + Length(2) + PreferredLife(4) + ValidLife(4) + PrefixLen(1) + Addr(16)
+                        prefix_len = str(struct.unpack(">B", requested_pd[offset+12:offset+13])[0])
+                        network_addr = str(IPv6Address(requested_pd[offset+13:offset+29]))
                         requested_pd_list.extend([IPv6Network(network_addr + '/' + prefix_len)])
                     except AddressValueError:
                         logger.error("Invalid IPv6 values in IAPREFIX option: %s", 
-                                                 requested_na[offset+4:offset+21])
+                                                 requested_pd[offset+13:offset+29])
                     # TODO: Should other IAADDR options be considered?
                 # Next offset is at offset + sizeof(opcode) + sizeof(option-len) + option-len
-                offset += (2 + 2 + struct.unpack(">H", requested_na[offset+2:offset+4])[0])
-            logger.debug("Requested list of IAADDRs is %s", requested_addr_list)
+                offset += (2 + 2 + struct.unpack(">H", requested_pd[offset+2:offset+4])[0])
+            logger.debug("Requested list of IAADDRs is %s", requested_pd_list)
             # For request msgs, if the IA address mentioned in client request is different from what we have 
             # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
             expired_prefixes = [prefix for prefix in requested_pd_list if prefix not in configured_pd_list]
-            logger.debug("Expired address list: %s", expired_addresses)
+            logger.debug("Expired address list: %s", expired_prefixes)
             if expired_prefixes != [] and msg.mtype == CONFIRM:
                 # If atleast one message is not valid, send back reply with status NotOnLink
                 return None
