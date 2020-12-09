@@ -4,7 +4,7 @@
 import socket
 import binascii
 from typing import Any, List, Tuple, Optional
-from ipaddress import IPv6Address, AddressValueError
+from ipaddress import IPv6Address, IPv6Network, AddressValueError
 
 from .datatypes import *
 from .dhcp6_database_manager import *
@@ -56,6 +56,7 @@ DEFAULT_T2 = 120
 DEFAULT_PREF_LIFETIME = 60
 DEFAULT_VALID_LIFETIME = 60
 DEFAULT_IAADDR_LEN = 24
+DEFAULT_IAPD_LEN = 25
 
 def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, 
                                   conf_data: List[Union[IPv6Address, Tuple]]) -> Optional[bytes]:
@@ -206,6 +207,92 @@ def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6,
 
     return encoded_value
 
+def construct_ia_pd_response_data(msg: Message.ClientServerDHCP6, 
+                                  conf_data: List[Union[IPv6Network, Tuple]]) -> Optional[bytes]:
+    ia_pd_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_PD) # There could be multiple IA_PD options
+    if conf_data is None:
+        return None
+    encoded_value = b'' 
+
+    # For each requested IA_PD option, find a corresponding configuration with that IA_ID
+    for requested_pd in ia_pd_opts:
+        requested_id = hex(struct.unpack(">I", requested_pd[:4])[0])
+        logger.debug("IA_PD requested for ID: %s",requested_id)
+        logger.debug("Available IA_PD configurations for the client: %s",conf_data)
+        if disable_ia_id:
+            # Ignore IAID values and return all addresses associated with this client
+            # When disable_ia_id is set, conf_data is expected to be List[IPv6Address]
+            configured_pd_list = conf_data
+        else:
+            # Consider only the set of addresses that have the same ID
+            configured_pd_list = [val[1] for val in \
+                                conf_data if val[0] ==  requested_id]
+            
+        encoded_value += requested_pd[:4] # The IA_PD value starts with IA_ID
+
+        (t1,t2) = struct.unpack(">ii", requested_pd[4:12])
+        if (t1 == t2 and t1 == 0) or t1 > t2 :
+            t1 = DEFAULT_T1
+            t2 = DEFAULT_T2
+
+        # For testing purpose, set t1 and t2 to low value
+        t1 = DEFAULT_T1
+        t2 = DEFAULT_T2
+        encoded_value += t1.to_bytes(4, 'big') + t2.to_bytes(4, 'big') # Append t1,t2 to the IA_PD value 
+
+        if len(configured_pd_list) == 0:
+            status_code_val =  DHCP6_NoBinding
+            encoded_value += struct.pack(">HHH", DHCP6_OPT_STATUS_CODE, 
+                                                 len(bytes(status_code_val)), status_code_val)
+            continue
+
+
+        if len(requested_pd) > 12: # Len > 12 => IA_PD options are present
+            offset = 12
+            requested_pd_list = []
+            while offset < len(requested_pd):
+                op = struct.unpack(">H", requested_pd[offset:offset+2])[0]
+                if op == DHCP6_OPT_IAPREFIX:
+                    try:
+                        prefix_len = str(struct.unpack(">B", requested_na[offset+4:offset+5])[0])
+                        network_addr = str(IPv6Address(requested_na[offset+5:offset+21]))
+                        requested_pd_list.extend([IPv6Network(network_addr + '/' + prefix_len)])
+                    except AddressValueError:
+                        logger.error("Invalid IPv6 values in IAPREFIX option: %s", 
+                                                 requested_na[offset+4:offset+21])
+                    # TODO: Should other IAADDR options be considered?
+                # Next offset is at offset + sizeof(opcode) + sizeof(option-len) + option-len
+                offset += (2 + 2 + struct.unpack(">H", requested_na[offset+2:offset+4])[0])
+            logger.debug("Requested list of IAADDRs is %s", requested_addr_list)
+            # For request msgs, if the IA address mentioned in client request is different from what we have 
+            # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
+            expired_prefixes = [prefix for prefix in requested_pd_list if prefix not in configured_pd_list]
+            logger.debug("Expired address list: %s", expired_addresses)
+            if expired_prefixes != [] and msg.mtype == CONFIRM:
+                # If atleast one message is not valid, send back reply with status NotOnLink
+                return None
+            for prefix in expired_prefixes:
+                pref_lifetime = 0
+                valid_lifetime = 0
+                iapd_length = DEFAULT_IAPD_LEN
+                encoded_value += struct.pack(">HH", DHCP6_OPT_IAPREFIX, iapd_length) + \
+                                   pref_lifetime.to_bytes(4, 'big') + valid_lifetime.to_bytes(4, 'big') + \
+                                   struct.pack(">B", prefix.prefixlen) + prefix.network_address.packed 
+
+
+        pref_lifetime = DEFAULT_PREF_LIFETIME
+        valid_lifetime = DEFAULT_VALID_LIFETIME
+        iapd_length = DEFAULT_IAPD_LEN
+
+        logger.debug("Constructing IA_PREFIX options for IA_PD with the following data: %s", configured_pd_list)
+        for prefix in configured_pd_list:
+            encoded_value += struct.pack(">HH", DHCP6_OPT_IAPREFIX, iapd_length) + \
+                                   pref_lifetime.to_bytes(4, 'big') + valid_lifetime.to_bytes(4, 'big') + \
+                                   struct.pack(">B", prefix.prefixlen) + prefix.network_address.packed
+            # TODO: Any possible IAADDR options to be added??
+
+    return encoded_value
+
 
 def append_mandatory_options(msg: Message.ClientServerDHCP6, opt_tuple: Tuple, 
                              server_duid: str) -> Tuple:
@@ -254,17 +341,19 @@ def construct_dhcp6_opt_list(msg: Message.ClientServerDHCP6,
                         encoded_data = construct_ia_na_response_data(msg, data)
                     elif opcode == DHCP6_OPT_IA_TA:
                         encoded_data = construct_ia_ta_response_data(msg, data)
-                        #TODO: Add code to handle IA_PREFIX option as well
                     else:
                         encoded_data = b''.join([elem.packed for elem in data])
                 elif all(isinstance(ele, str) for ele in data):
                     encoded_data = b''.join([elem.encode('utf-8') for elem in data])
+                elif all(isinstance(ele, IPv6Network) for ele in data):
+                    encoded_data = construct_ia_pd_response_data(msg, data)    
                 elif all(isinstance(ele, tuple) for ele in data): # Case of IA_NA or IA_TA values
                     if opcode == DHCP6_OPT_IA_NA: 
                         encoded_data = construct_ia_na_response_data(msg, data)
                     elif opcode == DHCP6_OPT_IA_TA:
                         encoded_data = construct_ia_ta_response_data(msg, data)
-                        #TODO:Add code to handle IA_PREFIX option as well
+                    elif opcode == DHCP6_OPT_IA_PD:
+                        encoded_data = construct_ia_pd_response_data(msg, data)
                     else:
                         logger.error("Configuration data for opcode %d "
                                      " has unexpected values %s of type List of Tuples", 
@@ -413,9 +502,9 @@ def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
     if DHCP6_OPT_IA_TA in msg.opts:
         encoded_ia_ta = construct_ia_ta_response_data(msg, host_conf_data.get(DHCP6_OPT_IA_TA, None))
 
-    opt_list = [(DHCP6_OPT_STATUS_CODE, DHCP6_Success)]
+    opt_list = [(DHCP6_OPT_STATUS_CODE, struct.pack(">H", DHCP6_Success))]
     if encoded_ia_na is None or encoded_ia_ta is None:
-        opt_list = [(DHCP6_OPT_STATUS_CODE, DHCP6_NotOnLink)]
+        opt_list = [(DHCP6_OPT_STATUS_CODE, struct.pack(">H", DHCP6_NotOnLink))]
         
     opt_list = append_mandatory_options(msg, opt_list, server_duid)
     dhcp_response = construct_dhcp6_packet(msg, REPLY, opt_list)

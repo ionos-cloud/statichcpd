@@ -155,6 +155,7 @@ def add_v6sock_binding(ifname: str) -> Optional[socket.socket]:
     ipr = IPRoute()
     idx = ipr.link_lookup(ifname=ifname)[0]
     idx_s = pack("I", idx)
+    ipr.close()
 
     # Create a socket
     try:

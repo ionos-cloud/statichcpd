@@ -7,7 +7,7 @@ import os
 from enum import Enum
 from configparser import SectionProxy
 import csv
-from ipaddress import IPv6Address
+from ipaddress import IPv6Address, IPv6Network
 
 from .datatypes import *
 from .logmgr import logger
@@ -48,6 +48,7 @@ class dtype(Enum):
     INT32 = 4
     STRING = 5
     IA = 6
+    PD = 7
 
 def insert_data_from(csv_filename: str) -> None:
     cursor = dhcp6_db_conn.cursor()
@@ -141,6 +142,12 @@ def fetch_v6host_conf_data(ifname: str, duid: Mac) -> Dict[str,Any]:
                     result[opcode].extend([(ia_id.strip(), IPv6Address(ia_addr.strip()))])
                 except ValueError:
                     result[opcode].append(IPv6Address(value))
+            elif datatype is dtype.PD:
+                try:
+                    ia_id, ia_pd = value.split(',')
+                    result[opcode].extend([(ia_id.strip(), IPv6Network(ia_addr.strip()))])
+                except ValueError:
+                    result[opcode].append(IPv6Network(value))
             elif datatype is dtype.STRING:
                 result[opcode].append(value)
             else:
