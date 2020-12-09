@@ -52,13 +52,16 @@ def construct_dhcp6_packet(msg: Union[Message.ClientServerDHCP6, Message.RelaySe
                                         )
 
 DEFAULT_T1 = 60
-DEFAULT_T2 = 60
+DEFAULT_T2 = 120
 DEFAULT_PREF_LIFETIME = 60
 DEFAULT_VALID_LIFETIME = 60
 DEFAULT_IAADDR_LEN = 24
 
-def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, conf_data: List[Union[IPv6Address, Tuple]]) -> bytes:
+def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, 
+                                  conf_data: List[Union[IPv6Address, Tuple]]) -> Optional[bytes]:
     ia_na_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_NA) # There could be multiple IA_NA options
+    if conf_data is None:
+        return None
     encoded_value = b'' 
 
     # For each requested IA_NA option, find a corresponding configuration with that IA_ID
@@ -113,6 +116,9 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, conf_data: Lis
             # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
             expired_addresses = [addr for addr in requested_addr_list if addr not in configured_addr6_list]
             logger.debug("Expired address list: %s", expired_addresses)
+            if expired_addresses != [] and msg.mtype == CONFIRM:
+                # If atleast one message is not valid, send back reply with status NotOnLink
+                return None
             for addr in expired_addresses:
                 pref_lifetime = 0
                 valid_lifetime = 0
@@ -133,10 +139,12 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, conf_data: Lis
 
     return encoded_value
 
-def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6, conf_data: List[Union[IPv6Address, Tuple]]) -> bytes:
+def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6, 
+                                  conf_data: List[Union[IPv6Address, Tuple]]) -> Optional[bytes]:
     ia_ta_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_TA) # There could be multiple IA_NA options
     encoded_value = b'' 
-
+    if conf_data is None:
+        return None
     # For each requested IA_TA option, find a corresponding configuration with that IA_ID
     for requested_ta in ia_ta_opts:
         requested_id = hex(struct.unpack(">I", requested_ta[:4])[0])
@@ -156,8 +164,35 @@ def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6, conf_data: Lis
             continue
 
 
-        if len(requested_ta) > 4: # Len > 4 => TODO: options are present.. Anything to handle?
-            do_something = 1
+        if len(requested_ta) > 4: # Len > 4 => Options are present
+            offset = 4
+            requested_addr_list = []
+            while offset < len(requested_na):
+                op = struct.unpack(">H", requested_na[offset:offset+2])[0]
+                if op == DHCP6_OPT_IAADDR:
+                    try:
+                        requested_addr_list.extend([IPv6Address(requested_na[offset+4:offset+20])])
+                    except AddressValueError:
+                        logger.error("Invalid IPv6 address in IAADDR option: %s", 
+                                                 requested_na[offset+4:offset+20])
+                    # TODO: Should other IAADDR options be considered?
+                # Next offset is at offset + sizeof(opcode) + sizeof(option-len) + option-len
+                offset += (2 + 2 + struct.unpack(">H", requested_na[offset+2:offset+4])[0])
+            logger.debug("Requested list of temporary IAADDRs is %s", requested_addr_list)
+            # For request msgs, if the IA address mentioned in client request is different from what we have 
+            # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
+            expired_addresses = [addr for addr in requested_addr_list if addr not in configured_addr6_list]
+            logger.debug("Expired temporary address list: %s", expired_addresses)
+            if expired_addresses != [] and msg.mtype == CONFIRM:
+                # If atleast one message is not valid, send back reply with status NotOnLink
+                return None
+            for addr in expired_addresses:
+                pref_lifetime = 0
+                valid_lifetime = 0
+                iaddr_length = DEFAULT_IAADDR_LEN
+                encoded_value += struct.pack(">HH", DHCP6_OPT_IAADDR, iaddr_length) + addr.packed + \
+                                   pref_lifetime.to_bytes(4, 'big') + valid_lifetime.to_bytes(4, 'big')
+
 
         pref_lifetime = DEFAULT_PREF_LIFETIME
         valid_lifetime = DEFAULT_VALID_LIFETIME
@@ -311,21 +346,21 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
         return None
 
     if rapid_commit:
-        do_nothing = 1
-        #dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid)
+        dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid)
     else:
         dhcp_response = construct_dhcp_adv(ifname, msg, request_list_opts, host_conf_data, server_duid)
 
     if not dhcp_response:
-        logger.error("Error constructing DHCP6 %s packet "
+        logger.error("Error constructing DHCP6 Advertise packet for %s"
                       "on interface %s for client %s",
-                      dhcp6_type_to_str(dhcp_response.mtype),
+                      msg.mtype,
                       ifname, client_mac)
         return None
     data = bytes(dhcp_response)
     return data
 
-def process_request_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid: str, src_mac: Mac) -> Optional[bytes]:
+def process_request_renew_rebind_msg(ifname: str, msg: Message.ClientServerDHCP6, 
+                                     server_duid: str, src_mac: Mac) -> Optional[bytes]:
     client_duid = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
     # TODO: If it's unicast and unicast is not supported for this client,
     #       send back Status code UseMulticast
@@ -347,14 +382,52 @@ def process_request_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
     dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid)
 
     if not dhcp_response:
-        logger.error("Error constructing DHCP6 %s packet "
+        logger.error("Error constructing DHCP6 Reply packet for %s "
                       "on interface %s for client %s",
-                      dhcp6_type_to_str(dhcp_response.mtype),
+                      msg.mtype,
                       ifname, client_mac)
         return None
     data = bytes(dhcp_response)
     return data
 
+def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid: str, src_mac: Mac) -> Optional[bytes]:
+    client_duid = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
+    # TODO: If it's unicast and unicast is not supported for this client,
+    #       send back Status code UseMulticast
+   
+    if use_mac_as_duid:
+        client_id = src_mac
+    else:
+        client_id = fetch_client_duid(client_duid)
+    logger.debug("Client ID received: %s", client_id)
+    
+    host_conf_data = fetch_v6host_conf_data(ifname, client_id)
+    if not host_conf_data:
+        logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", client_id, ifname)
+        return None
+
+    encoded_ia_na = ''
+    encoded_ia_ta = ''
+    if DHCP6_OPT_IA_NA in msg.opts: 
+        encoded_ia_na  = construct_ia_na_response_data(msg, host_conf_data.get(DHCP6_OPT_IA_NA, None))
+    if DHCP6_OPT_IA_TA in msg.opts:
+        encoded_ia_ta = construct_ia_ta_response_data(msg, host_conf_data.get(DHCP6_OPT_IA_TA, None))
+
+    opt_list = [(DHCP6_OPT_STATUS_CODE, DHCP6_Success)]
+    if encoded_ia_na is None or encoded_ia_ta is None:
+        opt_list = [(DHCP6_OPT_STATUS_CODE, DHCP6_NotOnLink)]
+        
+    opt_list = append_mandatory_options(msg, opt_list, server_duid)
+    dhcp_response = construct_dhcp6_packet(msg, REPLY, opt_list)
+
+    if not dhcp_response:
+        logger.error("Error constructing DHCP6 Reply packet for %s"
+                      "on interface %s for client %s",
+                      msg.mtype,
+                      ifname, client_mac)
+        return None
+    data = bytes(dhcp_response)
+    return data
 
 def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid: str, src_mac: Mac) -> Optional[bytes]:
     client_id = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
@@ -374,15 +447,11 @@ def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6, serve
 
     if msg.mtype is SOLICIT:
         return process_solicit_msg(ifname, msg, server_duid, src_mac)
-    if msg.mtype is REQUEST:
-        return process_request_msg(ifname, msg, server_duid, src_mac)
-    '''
+    if msg.mtype is REQUEST or msg.mtype is RENEW or msg.mtype is REBIND:
+        return process_request_renew_rebind_msg(ifname, msg, server_duid, src_mac)
     if msg.mtype is CONFIRM:
-        return process_confirm_msg(ifname, payload)
-    if msg.mtype is RENEW:
-        return process_renew_msg(ifname, payload)
-    if msg.mtype is REBIND:
-        return process_rebind_msg(ifname, payload)
+        return process_confirm_msg(ifname, msg, server_duid, src_mac)
+    '''
     if msg.mtype is DECLINE:
         return process_decline_msg(ifname, payload)
     if msg.mtype is RELEASE:
