@@ -69,8 +69,9 @@ def init(config: SectionProxy) -> None:
     dhcp_db_name = config['dhcp_db_filename']
     global dhcp_db_conn
     dhcp_db_name = str(dhcp_db_name) if type(dhcp_db_name) is not str else dhcp_db_name
-    logger.debug("Connecting to %s", dhcp_db_name)
-    dhcp_db_conn = sqlite3.connect(dhcp_db_name)
+    if dhcp_db_conn is None:
+        logger.debug("Connecting to %s", dhcp_db_name)
+        dhcp_db_conn = sqlite3.connect(dhcp_db_name)
     if dhcp_db_conn is None:
         raise Exception("Connecting to DHCP db {} failed".format(dhcp_db_name))
 
@@ -80,7 +81,7 @@ def init(config: SectionProxy) -> None:
     cursor.execute('delete from valid_attributes')
     dhcp_db_conn.commit()
     cursor.close()
-    logger.debug("Created config tables")
+    logger.debug("Created DHCPv4 config tables")
 
     #Populate the valid_attributes table
 

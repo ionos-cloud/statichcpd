@@ -8,6 +8,7 @@ import fcntl
 import struct
 
 from statichcpd.database_manager import *
+from statichcpd.dhcp6_database_manager import schema as v6_schema
 conn = None
 
 valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": (dhcp.DHCP_OPT_NETMASK, dtype.IPV4.value), 
@@ -66,8 +67,24 @@ def init_host_conf_table(mac_list: List[str], ifname_list: List[str], attr_lists
         conn.commit()
     cursor.close()
 
+def init_v6_tables(mac_list: List[str], ifname_list: List[str], v6_attr_lists: List[List[Tuple[str, str]]]) -> None:
+    cursor = conn.cursor()
+    cursor.execute('''delete from client_v6configuration;''')
+    conn.commit()
+    for i in range(len(mac_list)):
+        mac = mac_list[i]
+        ifname = ifname_list[i]
+        attr_list = v6_attr_lists[i]
+        for attr in attr_list:
+            cursor.execute(""" insert into client_v6configuration
+                                       (ifname, duid, attr_code, attr_val) values
+                                       (?, ?, ?, ?)""", (ifname, mac, attr[0], attr[1]))
+            conn.commit()
+    cursor.close()
 
-def create_dhcp_database(mac: List[str], ifname: List[str], attr_lists: List[List[Tuple[str, str]]]) -> None:
+def create_dhcp_database(mac: List[str], ifname: List[str], 
+                         attr_lists: List[List[Tuple[str, str]]], 
+                         v6_attr_lists: List[List[Tuple[str, str]]]) -> None:
     global conn
     if conn is None:
         conn = sqlite3.connect('/var/lib/statichcpd/Static_DHCP_DB.db')
@@ -76,14 +93,19 @@ def create_dhcp_database(mac: List[str], ifname: List[str], attr_lists: List[Lis
         print("Executing.. ", command)
         cursor.execute(command)
     conn.commit()
+    for command in v6_schema:
+        print("Executing.. ", command)
+        cursor.execute(command)
+    conn.commit()
     cursor.close()
     init_client_table(mac, ifname)
     init_host_conf_table(mac, ifname, attr_lists)
+    init_v6_tables(mac, ifname, v6_attr_lists)
 
 server_if_list  = ["veth0dummy0", "veth0dummy0"]
-ifname_list = ["veth0dummy1", "dummy0"]
+client_list = ["veth0dummy1", "dummy0"]
 mac_list = []
-for name in ifname_list:
+for name in client_list:
     mac_list.extend([getHwAddr(name)])
 attr_lists = [[(valid_single_valued_attr["IPv4"][0], "20.0.0.1"),
               (valid_single_valued_attr["Subnet Mask"][0], "255.255.255.0"), 
@@ -115,5 +137,11 @@ attr_lists = [[(valid_single_valued_attr["IPv4"][0], "20.0.0.1"),
               (valid_multi_valued_attr["Domain Server"][0], '192.168.144.60'),
               (valid_multi_valued_attr["Name Server"][0],  '192.168.144.66'),
               (valid_single_valued_attr["NETBIOS Scope"][0], '60.0.0.5')],]
+v6_attr_lists = [[(3, '20::1'),
+                  (3, '20::2'),
+                  (25, '20::/64')],
+                 [(3, '30::1'),
+                  (3, '30::2'),
+                  (25, '30::/64')]]
 
-create_dhcp_database(mac_list, server_if_list, attr_lists)
+create_dhcp_database(mac_list, server_if_list, attr_lists, v6_attr_lists)
