@@ -21,17 +21,20 @@ def init(config: SectionProxy) -> None:
  
 # Message Validation: RFC 3315 Section 15
 
-def validate_msg(msg: Union[Message.ClientServerDHCP6, Message.RelayServerDHCP6]) -> bool:
+def validate_msg(msg: Union[Message.ClientServerDHCP6, Message.RelayServerDHCP6],
+                 server_duid: str) -> bool:
     if msg.mtype in [SOLICIT, CONFIRM, REBIND] :
         return fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID) and \
                not fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID)
     elif msg.mtype in [REQUEST, RENEW, DECLINE, RELEASE]:
         return fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) and \
-               fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID) #and serverid == my DUID
+               fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID) and \
+               fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) == server_duid
     elif msg.mtype == INFORMATIONREQUEST:
         return not fetch_dhcp6_opt(msg, DHCP6_OPT_IA_NA) and \
-               not fetch_dhcp6_opt(msg, DHCP6_OPT_IA_TA) #and
-               #(not fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) or serverid == my DUID)
+               not fetch_dhcp6_opt(msg, DHCP6_OPT_IA_TA) and \
+               (not fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) or \
+               fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) == server_duid)
     return True
 
 def ll_addr(address: bytes) -> str:
@@ -68,7 +71,7 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6,
     # For each requested IA_NA option, find a corresponding configuration with that IA_ID
     for requested_na in ia_na_opts:
         requested_id = hex(struct.unpack(">I", requested_na[:4])[0])
-        logger.debug("IA_NA requested for ID: %s",requested_id)
+        logger.debug("IA_NA requested for IAID: %s",requested_id)
         logger.debug("Available IA_NA configurations for the client: %s",conf_data)
         if disable_ia_id:
             # Ignore IAID values and return all addresses associated with this client
@@ -431,7 +434,7 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
         client_id = src_mac
     else:
         client_id = fetch_client_duid(client_duid)
-    logger.debug("Client ID received: %s", client_id)
+    logger.debug("%s used as client ID for database lookup", client_id)
 
     
     host_conf_data = fetch_v6host_conf_data(ifname, client_id)
@@ -525,7 +528,7 @@ def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
 
 def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid: str, src_mac: Mac) -> Optional[bytes]:
     client_id = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
-    valid_msg = validate_msg(msg)
+    valid_msg = validate_msg(msg, server_duid)
     if not valid_msg:
         logger.error("%s message validation failed.", dhcp6_type_to_str(msg.mtype))
         # TODO:
@@ -555,11 +558,41 @@ def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6, serve
     '''
     return None
 
-def process_relay_server_msg(ifname: str, payload: Message.RelayServerDHCP6, server_duid: str, src_mac: Mac) -> Optional[bytes]:
-    logger.debug("Received a relay server message of type %s", dhcp6_type_to_str(payload.mtype))
-    if msg.mtype is RELAYFORW:
-        return process_relayforw_msg(ifname, payload)
-    return None
+def process_relayforw_msg(ifname: str, payload: Message.RelayServerDHCP6, 
+                          server_duid: str, src_mac: Mac) -> Optional[bytes]:
+    dhcp_msg = fetch_dhcp6_opt(payload, DHCP6_OPT_RELAY_MSG)
+    if dhcp_msg is None:
+        logger.debug("Empty DHCP Message in DHCP Relay Forward msg from %s on intf %s",
+                                                       src_mac, ifname)
+        return None
+    reply_msg = process_client_server_msg(ifname, Message.ClientServerDHCP6(dhcp_msg),
+                                                                  server_duid, src_mac)
+    if reply_msg is None:
+        logger.debug("Empty DHCP Message in DHCP Relay Reply to %s on intf %s",
+                                                       src_mac, ifname)
+        return None
+    relay_reply = Message.RelayServerDHCP6(
+                                         mtype=RELAYREPL,
+                                         hops=payload.hops,
+                                         la=payload.la,
+                                         pa=payload.pa,
+                                         opts=[(DHCP6_OPT_RELAY_MSG, reply_msg)]
+                                        )
+    return bytes(relay_reply)
+
+
+
+def process_relay_server_msg(ifname: str, payload: Message.RelayServerDHCP6, 
+                             server_duid: str, src_mac: Mac) -> Optional[bytes]:
+    logger.debug("Received a relay server message of type %s from %s", 
+                  dhcp6_type_to_str(payload.mtype), src_mac)
+    if payload.mtype is not RELAYFORW:
+        return None
+    if use_mac_as_duid:
+        logger.error("Server configured to use source mac as client DUID. Unable to handle %s from relay agent(%s).",
+                      dhcp6_type_to_str(payload.mtype), src_mac)
+        return None
+    return process_relayforw_msg(ifname, payload, server_duid, src_mac)
 
 def process_dhcp6_packet(ifname: str, dhcp6_msg: Message, server_mac: Mac, src_mac: Mac) -> Optional[bytes]:
     payload = dhcp6_msg.data

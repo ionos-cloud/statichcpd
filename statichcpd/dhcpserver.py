@@ -514,7 +514,6 @@ def start_server():
                         try:
                             if len(udp.data) > 0:
                                 dhcp6_msg = Message(udp.data)
-                                logger.debug(repr(dhcp6_msg))
                                 pkt = process_dhcp6_packet(ifname, dhcp6_msg, ifcache_entry.mac, Mac(rawmac))
                                 if pkt is None:
                                     logger.debug("No DHCP6 response sent for packet on %s", ifname)

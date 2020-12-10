@@ -289,7 +289,7 @@ class Message(dpkt.Packet):
         '''
         __hdr__ = (
             ('mtype', 'B', RELAYFORW),
-            ('hops', 'H', 1),
+            ('hops', 'B', 1),
             ('la', '16s', ''),
             ('pa', '16s', '')
         )
@@ -305,7 +305,7 @@ class Message(dpkt.Packet):
                 return b''
             l = []
             for t, data in self.opts:
-                l.append(struct.pack("BB%is"%len(data), t, len(data), data))
+                l.append(struct.pack(">HH%is"%len(data), t, len(data), data))
             l.append(b'\xff')
             return b''.join(l)
 
@@ -344,7 +344,7 @@ class Message(dpkt.Packet):
         try:
             if buf[0] in client_server_msgs:
                 self.data = self.ClientServerDHCP6(buf)
-            elif msg[0] in relay_server_msgs:
+            elif buf[0] in relay_server_msgs:
                 self.data = self.RelayServerDHCP6(buf)
             else:
                 self.data = buf
