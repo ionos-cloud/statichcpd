@@ -139,9 +139,11 @@ attr_lists = [[(valid_single_valued_attr["IPv4"][0], "20.0.0.1"),
               (valid_single_valued_attr["NETBIOS Scope"][0], '60.0.0.5')],]
 v6_attr_lists = [[(3, '20::1'),
                   (3, '20::2'),
+                  (4, '40::1'),
                   (25, '20::/64')],
                  [(3, '30::1'),
                   (3, '30::2'),
+                  (4, '50::1'),
                   (25, '30::/64')]]
 
 create_dhcp_database(mac_list, server_if_list, attr_lists, v6_attr_lists)

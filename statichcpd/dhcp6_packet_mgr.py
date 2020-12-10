@@ -143,7 +143,7 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6,
 def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6, 
                                   conf_data: List[Union[IPv6Address, Tuple]]) -> Optional[bytes]:
     ia_ta_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_TA) # There could be multiple IA_NA options
-    encoded_value = b'' 
+    encoded_value = b''
     if conf_data is None:
         return None
     # For each requested IA_TA option, find a corresponding configuration with that IA_ID
@@ -372,9 +372,11 @@ def construct_dhcp6_opt_list(msg: Message.ClientServerDHCP6,
 def construct_dhcp_reply(ifname: str, msg: Message.ClientServerDHCP6, 
                        request_list_opt: List[int], 
                        host_conf_data: Dict[str, str],
-                       server_duid: str) -> Message.ClientServerDHCP6:
+                       server_duid: str,
+                       client_id: Union[Mac, str]) -> Message.ClientServerDHCP6:
     opt_list = construct_dhcp6_opt_list(msg, request_list_opt, ifname, host_conf_data)
     if not opt_list: # If no other parameters were requested by client, should offer be sent?
+        logger.debug("No configuration data found for %s", client_id)
         return None
     # What should be the format of server duid from configuration??? Just take ll address?
     opt_list = append_mandatory_options(msg, opt_list, server_duid)
@@ -383,9 +385,11 @@ def construct_dhcp_reply(ifname: str, msg: Message.ClientServerDHCP6,
 def construct_dhcp_adv(ifname: str, msg: Message.ClientServerDHCP6, 
                        request_list_opt: List[int], 
                        host_conf_data: Dict[str, str],
-                       server_duid: str) -> Message.ClientServerDHCP6:
+                       server_duid: str, 
+                       client_id: Union[Mac, str]) -> Message.ClientServerDHCP6:
     opt_list = construct_dhcp6_opt_list(msg, request_list_opt, ifname, host_conf_data)
     if not opt_list: # If no other parameters were requested by client, should offer be sent?
+        logger.debug("No configuration data found for %s", client_id)
         return None
     # What should be the format of server duid from configuration??? Just take ll address?
     opt_list = append_mandatory_options(msg, opt_list, server_duid)
@@ -436,15 +440,15 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
         return None
 
     if rapid_commit:
-        dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid)
+        dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid, client_id)
     else:
-        dhcp_response = construct_dhcp_adv(ifname, msg, request_list_opts, host_conf_data, server_duid)
+        dhcp_response = construct_dhcp_adv(ifname, msg, request_list_opts, host_conf_data, server_duid, client_id)
 
     if not dhcp_response:
-        logger.error("Error constructing DHCP6 Advertise packet for %s"
+        logger.debug("No response DHCP6 Advertise packet for %s "
                       "on interface %s for client %s",
-                      msg.mtype,
-                      ifname, client_mac)
+                      dhcp6_type_to_str(msg.mtype),
+                      ifname, client_id)
         return None
     data = bytes(dhcp_response)
     return data
@@ -469,10 +473,10 @@ def process_request_renew_rebind_msg(ifname: str, msg: Message.ClientServerDHCP6
         logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", client_id, ifname)
         return None
 
-    dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid)
+    dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid, client_id)
 
     if not dhcp_response:
-        logger.error("Error constructing DHCP6 Reply packet for %s "
+        logger.error("No response DHCP6 Reply packet for %s "
                       "on interface %s for client %s",
                       msg.mtype,
                       ifname, client_mac)
@@ -511,7 +515,7 @@ def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
     dhcp_response = construct_dhcp6_packet(msg, REPLY, opt_list)
 
     if not dhcp_response:
-        logger.error("Error constructing DHCP6 Reply packet for %s"
+        logger.error("No response DHCP6 Reply packet for %s"
                       "on interface %s for client %s",
                       msg.mtype,
                       ifname, client_mac)
