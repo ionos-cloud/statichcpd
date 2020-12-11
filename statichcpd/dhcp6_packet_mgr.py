@@ -14,6 +14,13 @@ from .dhcp6 import *
 use_mac_as_duid = False
 disable_ia_id = False
 
+DEFAULT_T1 = 1000
+DEFAULT_T2 = 2000
+DEFAULT_PREF_LIFETIME = 3000
+DEFAULT_VALID_LIFETIME = 4000
+DEFAULT_IAADDR_LEN = 24
+DEFAULT_IAPD_LEN = 25
+
 def init(config: SectionProxy) -> None:
     global use_mac_as_duid, disable_ia_id
     use_mac_as_duid = config.get('use_mac_as_client_duid', 'False')
@@ -53,13 +60,6 @@ def construct_dhcp6_packet(msg: Union[Message.ClientServerDHCP6, Message.RelaySe
                                          xid=msg.xid,
                                          opts=opt_list
                                         )
-
-DEFAULT_T1 = 60
-DEFAULT_T2 = 120
-DEFAULT_PREF_LIFETIME = 60
-DEFAULT_VALID_LIFETIME = 60
-DEFAULT_IAADDR_LEN = 24
-DEFAULT_IAPD_LEN = 25
 
 def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, 
                                   conf_data: List[Union[IPv6Address, Tuple]]) -> Optional[bytes]:
@@ -596,7 +596,7 @@ def process_relay_server_msg(ifname: str, payload: Message.RelayServerDHCP6,
 
 def process_dhcp6_packet(ifname: str, dhcp6_msg: Message, server_mac: Mac, src_mac: Mac) -> Optional[bytes]:
     payload = dhcp6_msg.data
-    server_duid = struct.pack(">HH", 3, 1) + (str(server_mac).replace(":","")).encode('utf-8')
+    server_duid = struct.pack(">HH", 3, 1) + binascii.unhexlify((str(server_mac)).replace(":",""))
     if isinstance(payload, Message.ClientServerDHCP6):
         pkt = process_client_server_msg(ifname, payload, server_duid, src_mac)
     elif isinstance(payload, Message.RelayServerDHCP6):
