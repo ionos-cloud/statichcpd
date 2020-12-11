@@ -1,4 +1,4 @@
-opcode,max_count,datatype    
+opcode,max_count,datatype
 DHCP6_OPT_DNS_SERVERS,100,IPV6    
 DHCP6_OPT_DOMAIN_LIST,100,STRING                                 
 DHCP6_OPT_SNTP_SERVERS,100,IPV6                                  
@@ -6,4 +6,4 @@ DHCP6_OPT_CLIENT_FQDN,100,STRING
 DHCP6_OPT_IA_NA,100,IA
 DHCP6_OPT_IA_TA,100,IA
 DHCP6_OPT_IA_PD,100,PD
-257, 100, IPV6
+257,100, IPV6

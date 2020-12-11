@@ -29,8 +29,7 @@ valid_multi_valued_attr: Dict[str, int] = {"Router": (dhcp.DHCP_OPT_ROUTER, dtyp
                                            "Static Route": (dhcp.DHCP_OPT_STATICROUTE, dtype.STATICRT.value),
                                            "SMTP-Server": (dhcp.DHCP_OPT_SMTPSERVER, dtype.IPV4.value),
                                            "POP3-Server": (dhcp.DHCP_OPT_POP3SERVER, dtype.IPV4.value),
-                                           "Classless Static Route": (121, dtype.STATICRT.value),
-                                           "IPv6": (DHCP_IPV6_OPCODE, dtype.IPV6.value)}  # Using unused option type
+                                           "Classless Static Route": (121, dtype.STATICRT.value)}
 
 
 def getHwAddr(ifname: str) -> str:

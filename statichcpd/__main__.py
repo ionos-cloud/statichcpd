@@ -6,7 +6,6 @@ from .dhcpserver import start_server
 from .logmgr import set_log_config
 import configparser
 from . import database_manager
-from . import dhcp6_database_manager
 from . import dhcpserver
 from . import dhcp_packet_mgr
 from . import dhcp6_packet_mgr
@@ -36,7 +35,6 @@ if __name__ == "__main__":
     config.read(config_file)
     statichcpd_config = config['statichcpd'] 
     database_manager.init(statichcpd_config)
-    dhcp6_database_manager.init(statichcpd_config)
     dhcpserver.init(statichcpd_config)
     dhcp_packet_mgr.init(statichcpd_config)
     dhcp6_packet_mgr.init(statichcpd_config)

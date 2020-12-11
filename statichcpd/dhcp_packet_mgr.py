@@ -190,7 +190,7 @@ def construct_dhcp_ack(dhcp_obj: dhcp.DHCP, ifname: str, server_id: IPv4Address,
 def process_dhcp_discover(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: str) -> Optional[Tuple[bytes, IPv4Address, IPv4Address]]:
     request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
     client_mac =  Mac(dhcp_obj.chaddr)
-    host_conf_data = fetch_host_conf_data(ifname, client_mac)
+    host_conf_data = fetch_host_conf_data(DHCPv4DB, ifname, client_mac)
 
     if not host_conf_data:
         logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", str(client_mac), ifname)
@@ -261,7 +261,7 @@ def process_dhcp_request(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: st
     client_state = fetch_client_state(server_id_in_request, ciaddr_in_request, requested_ip)
     logger.debug("Based on DHCP Request opts, client %s is in %s state",
                               str(client_mac), client_state.name)
-    host_conf_data = fetch_host_conf_data(ifname, client_mac)
+    host_conf_data = fetch_host_conf_data(DHCPv4DB, ifname, client_mac)
 
     if not host_conf_data:
         logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", str(client_mac), ifname)
@@ -336,7 +336,7 @@ def process_dhcp_request(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: st
 
 def process_dhcp_inform(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: str) -> Optional[Tuple[bytes, IPv4Address, IPv4Address]]:
     client_mac =  Mac(dhcp_obj.chaddr)
-    host_conf_data = fetch_host_conf_data(ifname, client_mac)
+    host_conf_data = fetch_host_conf_data(DHCPv4DB, ifname, client_mac)
     if not host_conf_data:
         logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", str(client_mac), ifname)
         return (None, None, None)

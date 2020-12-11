@@ -7,7 +7,7 @@ from typing import Any, List, Tuple, Optional
 from ipaddress import IPv6Address, IPv6Network, AddressValueError
 
 from .datatypes import *
-from .dhcp6_database_manager import *
+from .database_manager import *
 from .logmgr import logger
 from .dhcp6 import *
 
@@ -437,7 +437,7 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
     logger.debug("%s used as client ID for database lookup", client_id)
 
     
-    host_conf_data = fetch_v6host_conf_data(ifname, client_id)
+    host_conf_data = fetch_host_conf_data(DHCPv6DB, ifname, client_id)
     if not host_conf_data:
         logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", client_id, ifname)
         return None
@@ -471,7 +471,7 @@ def process_request_renew_rebind_msg(ifname: str, msg: Message.ClientServerDHCP6
         client_id = fetch_client_duid(client_duid)
     logger.debug("Client ID received: %s", client_id)
     
-    host_conf_data = fetch_v6host_conf_data(ifname, client_id)
+    host_conf_data = fetch_host_conf_data(DHCPv6DB, ifname, client_id)
     if not host_conf_data:
         logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", client_id, ifname)
         return None
@@ -498,7 +498,7 @@ def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
         client_id = fetch_client_duid(client_duid)
     logger.debug("Client ID received: %s", client_id)
     
-    host_conf_data = fetch_v6host_conf_data(ifname, client_id)
+    host_conf_data = fetch_host_conf_data(DHCPv6DB, ifname, client_id)
     if not host_conf_data:
         logger.debug("No configuration data found for the host %s on intf %s. Skipping ..", client_id, ifname)
         return None
