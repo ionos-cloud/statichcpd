@@ -71,7 +71,8 @@ class InterfaceCache(object):
         self._by_fd = {}   # Access using fd will be available only after the entry is active!
         self._by_ifname = {}
 
-    def cleanup(self):
+    def __del__(self):
+        logger.debug("Cleaning up interface cache")
         for entry in self._by_ifname.values():
             self.deactivate(entry)
         del self._by_fd
@@ -111,8 +112,9 @@ class InterfaceCache(object):
             entry.v6_txsock.close()
         entry.rawsock = None
         entry.v6_txsock = None
+        # Invalidate access using fd since the cache entry is deactivated
+        self._by_fd[entry.raw_fd] = None
         entry.raw_fd =  None
-        #self._by_fd[entry.raw_fd] = entry
         self._by_ifname[entry.ifname] =  entry
 
 
@@ -353,6 +355,7 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         ifcache_entry.ip = None
 
 def start_server():
+    global ifcache
     try:
     # 1. Create an NL socket and bind
         nlsock = IPRoute()
@@ -424,7 +427,6 @@ def start_server():
                         if not ifcache_entry:
                             logger.error("Received packet on untracked interface file descriptor %d!", fd)
                             raise KeyboardInterrupt
-
                         intf_sock = ifcache_entry.rawsock
                         ifname = ifcache_entry.ifname
                         if intf_sock is None:
@@ -536,5 +538,5 @@ def start_server():
 
     except KeyboardInterrupt:
         exit()
-        ifcache.cleanup()
+        del ifcache
         logger.info("Server exiting..")
