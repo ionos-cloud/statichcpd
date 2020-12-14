@@ -8,7 +8,6 @@ import fcntl
 import struct
 
 from statichcpd.database_manager import *
-from statichcpd.dhcp6_database_manager import schema as v6_schema
 conn = None
 
 valid_single_valued_attr: Dict[str, int] = {"Subnet Mask": (dhcp.DHCP_OPT_NETMASK, dtype.IPV4.value), 
@@ -79,6 +78,19 @@ def init_v6_tables(mac_list: List[str], ifname_list: List[str], v6_attr_lists: L
                                        (ifname, duid, attr_code, attr_val) values
                                        (?, ?, ?, ?)""", (ifname, mac, attr[0], attr[1]))
             conn.commit()
+
+        cursor.execute(""" insert into client_v6configuration
+                           (ifname, duid, attr_code, attr_val) values
+                           (?, ?, ?, ?)""", (ifname, mac, 259, 60)) 
+        cursor.execute(""" insert into client_v6configuration
+                           (ifname, duid, attr_code, attr_val) values
+                           (?, ?, ?, ?)""", (ifname, mac, 260, 120))
+        cursor.execute(""" insert into client_v6configuration
+                           (ifname, duid, attr_code, attr_val) values
+                           (?, ?, ?, ?)""", (ifname, mac, 261, 60))
+        cursor.execute(""" insert into client_v6configuration
+                           (ifname, duid, attr_code, attr_val) values
+                           (?, ?, ?, ?)""", (ifname, mac, 262, 120))
     cursor.close()
 
 def create_dhcp_database(mac: List[str], ifname: List[str], 
@@ -89,10 +101,6 @@ def create_dhcp_database(mac: List[str], ifname: List[str],
         conn = sqlite3.connect('/var/lib/statichcpd/Static_DHCP_DB.db')
     cursor = conn.cursor()
     for command in schema:
-        print("Executing.. ", command)
-        cursor.execute(command)
-    conn.commit()
-    for command in v6_schema:
         print("Executing.. ", command)
         cursor.execute(command)
     conn.commit()

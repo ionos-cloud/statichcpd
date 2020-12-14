@@ -62,11 +62,12 @@ def construct_dhcp6_packet(msg: Union[Message.ClientServerDHCP6, Message.RelaySe
                                         )
 
 def construct_ia_na_response_data(msg: Message.ClientServerDHCP6, 
-                                  conf_data: List[Union[IPv6Address, Tuple]]) -> Optional[bytes]:
+                                  conf_data: List[Union[IPv6Address, Tuple]],
+                                  host_data: Dict[str,str]) -> Optional[bytes]:
     ia_na_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_NA) # There could be multiple IA_NA options
     if conf_data is None:
         return None
-    encoded_value = b'' 
+    encoded_value = b''
 
     # For each requested IA_NA option, find a corresponding configuration with that IA_ID
     for requested_na in ia_na_opts:
@@ -89,9 +90,11 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6,
             t1 = DEFAULT_T1
             t2 = DEFAULT_T2
 
-        # For testing purpose, set t1 and t2 to low value
-        t1 = DEFAULT_T1
-        t2 = DEFAULT_T2
+        if DHCP6_NON_DEFAULT_T1 in host_data:
+            t1 = host_data[DHCP6_NON_DEFAULT_T1].value
+        if DHCP6_NON_DEFAULT_T2 in host_data:
+            t2 = host_data[DHCP6_NON_DEFAULT_T2].value
+
         encoded_value += t1.to_bytes(4, 'big') + t2.to_bytes(4, 'big') # Append t1,t2 to the IA_NA value 
 
         if len(configured_addr6_list) == 0:
@@ -131,9 +134,14 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6,
                                    pref_lifetime.to_bytes(4, 'big') + valid_lifetime.to_bytes(4, 'big')
 
 
+        iaddr_length = DEFAULT_IAADDR_LEN
         pref_lifetime = DEFAULT_PREF_LIFETIME
         valid_lifetime = DEFAULT_VALID_LIFETIME
-        iaddr_length = DEFAULT_IAADDR_LEN
+        if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
+            pref_lifetime = host_data[DHCP6_NON_DEFAULT_PREF_LIFETIME].value
+        if DHCP6_NON_DEFAULT_VALID_LIFETIME in host_data:
+            valid_lifetime = host_data[DHCP6_NON_DEFAULT_VALID_LIFETIME].value
+
 
         logger.debug("Constructing IA_ADDR options for IA_NA with the following data: %s", configured_addr6_list)
         for addr in configured_addr6_list:
@@ -144,7 +152,8 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6,
     return encoded_value
 
 def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6, 
-                                  conf_data: List[Union[IPv6Address, Tuple]]) -> Optional[bytes]:
+                                  conf_data: List[Union[IPv6Address, Tuple]],
+                                  host_data: Dict[str, str]) -> Optional[bytes]:
     ia_ta_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_TA) # There could be multiple IA_NA options
     encoded_value = b''
     if conf_data is None:
@@ -202,6 +211,12 @@ def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6,
         valid_lifetime = DEFAULT_VALID_LIFETIME
         iaddr_length = DEFAULT_IAADDR_LEN
 
+        if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
+            pref_lifetime = host_data[DHCP6_NON_DEFAULT_PREF_LIFETIME].value
+        if DHCP6_NON_DEFAULT_VALID_LIFETIME in host_data:
+            valid_lifetime = host_data[DHCP6_NON_DEFAULT_VALID_LIFETIME].value
+
+
         logger.debug("Constructing IA_ADDR options for IA_TA with the following data: %s", configured_addr6_list)
         for addr in configured_addr6_list:
             encoded_value += struct.pack(">HH", DHCP6_OPT_IAADDR, iaddr_length) + addr.packed + \
@@ -211,7 +226,8 @@ def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6,
     return encoded_value
 
 def construct_ia_pd_response_data(msg: Message.ClientServerDHCP6, 
-                                  conf_data: List[Union[IPv6Network, Tuple]]) -> Optional[bytes]:
+                                  conf_data: List[Union[IPv6Network, Tuple]],
+                                  host_data: Dict[str, str]) -> Optional[bytes]:
     ia_pd_opts = fetch_all_dhcp6_opt(msg, DHCP6_OPT_IA_PD) # There could be multiple IA_PD options
     if conf_data is None:
         return None
@@ -238,9 +254,11 @@ def construct_ia_pd_response_data(msg: Message.ClientServerDHCP6,
             t1 = DEFAULT_T1
             t2 = DEFAULT_T2
 
-        # For testing purpose, set t1 and t2 to low value
-        t1 = DEFAULT_T1
-        t2 = DEFAULT_T2
+        if DHCP6_NON_DEFAULT_T1 in host_data:
+            t1 = host_data[DHCP6_NON_DEFAULT_T1].value
+        if DHCP6_NON_DEFAULT_T2 in host_data:
+            t2 = host_data[DHCP6_NON_DEFAULT_T2].value
+
         encoded_value += t1.to_bytes(4, 'big') + t2.to_bytes(4, 'big') # Append t1,t2 to the IA_PD value 
 
         if len(configured_pd_list) == 0:
@@ -287,6 +305,11 @@ def construct_ia_pd_response_data(msg: Message.ClientServerDHCP6,
         pref_lifetime = DEFAULT_PREF_LIFETIME
         valid_lifetime = DEFAULT_VALID_LIFETIME
         iapd_length = DEFAULT_IAPD_LEN
+
+        if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
+            pref_lifetime = host_data[DHCP6_NON_DEFAULT_PREF_LIFETIME].value
+        if DHCP6_NON_DEFAULT_VALID_LIFETIME in host_data:
+            valid_lifetime = host_data[DHCP6_NON_DEFAULT_VALID_LIFETIME].value
 
         logger.debug("Constructing IA_PREFIX options for IA_PD with the following data: %s", configured_pd_list)
         for prefix in configured_pd_list:
@@ -342,22 +365,22 @@ def construct_dhcp6_opt_list(msg: Message.ClientServerDHCP6,
             elif isinstance(data, list) and len(data) > 0:
                 if all(isinstance(ele, IPv6Address) for ele in data):
                     if opcode == DHCP6_OPT_IA_NA: 
-                        encoded_data = construct_ia_na_response_data(msg, data)
+                        encoded_data = construct_ia_na_response_data(msg, data, host_conf_data)
                     elif opcode == DHCP6_OPT_IA_TA:
-                        encoded_data = construct_ia_ta_response_data(msg, data)
+                        encoded_data = construct_ia_ta_response_data(msg, data, host_conf_data)
                     else:
                         encoded_data = b''.join([elem.packed for elem in data])
                 elif all(isinstance(ele, str) for ele in data):
                     encoded_data = b''.join([elem.encode('utf-8') for elem in data])
                 elif all(isinstance(ele, IPv6Network) for ele in data):
-                    encoded_data = construct_ia_pd_response_data(msg, data)    
+                    encoded_data = construct_ia_pd_response_data(msg, data, host_conf_data)    
                 elif all(isinstance(ele, tuple) for ele in data): # Case of IA_NA or IA_TA values
                     if opcode == DHCP6_OPT_IA_NA: 
-                        encoded_data = construct_ia_na_response_data(msg, data)
+                        encoded_data = construct_ia_na_response_data(msg, data, host_conf_data)
                     elif opcode == DHCP6_OPT_IA_TA:
-                        encoded_data = construct_ia_ta_response_data(msg, data)
+                        encoded_data = construct_ia_ta_response_data(msg, data, host_conf_data)
                     elif opcode == DHCP6_OPT_IA_PD:
-                        encoded_data = construct_ia_pd_response_data(msg, data)
+                        encoded_data = construct_ia_pd_response_data(msg, data, host_conf_data)
                     else:
                         logger.error("Configuration data for opcode %d "
                                      " has unexpected values %s of type List of Tuples", 
