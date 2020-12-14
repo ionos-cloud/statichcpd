@@ -71,6 +71,12 @@ class InterfaceCache(object):
         self._by_fd = {}   # Access using fd will be available only after the entry is active!
         self._by_ifname = {}
 
+    def cleanup(self):
+        for entry in self._by_ifname.values():
+            self.deactivate(entry)
+        del self._by_fd
+        del self._by_ifname
+
     def add(self, ifname, idx):
         entry = InterfaceCacheEntry(ifname, idx)
         self._by_ifname[ifname] = entry
@@ -530,4 +536,5 @@ def start_server():
 
     except KeyboardInterrupt:
         exit()
+        ifcache.cleanup()
         logger.info("Server exiting..")

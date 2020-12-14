@@ -14,17 +14,23 @@ from .dhcp6 import *
 use_mac_as_duid = False
 disable_ia_id = False
 
-DEFAULT_T1 = 1000
-DEFAULT_T2 = 2000
-DEFAULT_PREF_LIFETIME = 3000
-DEFAULT_VALID_LIFETIME = 4000
 DEFAULT_IAADDR_LEN = 24
 DEFAULT_IAPD_LEN = 25
 
+default_t1 = 0
+default_t2 = 0
+default_pref_lifetime = 0
+default_valid_lifetime = 0
+
 def init(config: SectionProxy) -> None:
     global use_mac_as_duid, disable_ia_id
+    global default_t1, default_t2, default_pref_lifetime, default_valid_lifetime
     use_mac_as_duid = config.get('use_mac_as_client_duid', 'False')
     disable_ia_id = config.get('disable_ia_id', 'False')
+    default_t1 = config.getint('default_renew_time', 1000)
+    default_t2 = config.getint('default_rebind_time', 2000)
+    default_pref_lifetime = config.getint('default_pref_lifetime', 3000)
+    default_valid_lifetime = config.getint('default_valid_lifetime', 4000)
  
 # Message Validation: RFC 3315 Section 15
 
@@ -87,8 +93,8 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6,
 
         (t1,t2) = struct.unpack(">ii", requested_na[4:12])
         if (t1 == t2 and t1 == 0) or t1 > t2 :
-            t1 = DEFAULT_T1
-            t2 = DEFAULT_T2
+            t1 = default_t1
+            t2 = default_t2
 
         if DHCP6_NON_DEFAULT_T1 in host_data:
             t1 = host_data[DHCP6_NON_DEFAULT_T1].value
@@ -135,8 +141,8 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6,
 
 
         iaddr_length = DEFAULT_IAADDR_LEN
-        pref_lifetime = DEFAULT_PREF_LIFETIME
-        valid_lifetime = DEFAULT_VALID_LIFETIME
+        pref_lifetime = default_pref_lifetime
+        valid_lifetime = default_valid_lifetime
         if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
             pref_lifetime = host_data[DHCP6_NON_DEFAULT_PREF_LIFETIME].value
         if DHCP6_NON_DEFAULT_VALID_LIFETIME in host_data:
@@ -207,8 +213,8 @@ def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6,
                                    pref_lifetime.to_bytes(4, 'big') + valid_lifetime.to_bytes(4, 'big')
 
 
-        pref_lifetime = DEFAULT_PREF_LIFETIME
-        valid_lifetime = DEFAULT_VALID_LIFETIME
+        pref_lifetime = default_pref_lifetime
+        valid_lifetime = default_valid_lifetime
         iaddr_length = DEFAULT_IAADDR_LEN
 
         if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
@@ -251,8 +257,8 @@ def construct_ia_pd_response_data(msg: Message.ClientServerDHCP6,
 
         (t1,t2) = struct.unpack(">ii", requested_pd[4:12])
         if (t1 == t2 and t1 == 0) or t1 > t2 :
-            t1 = DEFAULT_T1
-            t2 = DEFAULT_T2
+            t1 = default_t1
+            t2 = default_t2
 
         if DHCP6_NON_DEFAULT_T1 in host_data:
             t1 = host_data[DHCP6_NON_DEFAULT_T1].value
@@ -302,8 +308,8 @@ def construct_ia_pd_response_data(msg: Message.ClientServerDHCP6,
                                    struct.pack(">B", prefix.prefixlen) + prefix.network_address.packed 
 
 
-        pref_lifetime = DEFAULT_PREF_LIFETIME
-        valid_lifetime = DEFAULT_VALID_LIFETIME
+        pref_lifetime = default_pref_lifetime
+        valid_lifetime = default_valid_lifetime
         iapd_length = DEFAULT_IAPD_LEN
 
         if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
