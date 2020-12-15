@@ -45,7 +45,7 @@ schema = [
            attr_code int not null,
            attr_val not null,
            constraint compkey_clientid_if_attr unique(ifname, duid, attr_code, attr_val)
-           foreign key (ifname, duid) references clients(ifname, duid) on delete cascade,
+           foreign key (ifname, duid) references clients(ifname, mac) on delete cascade,
            foreign key (attr_code) references valid_v6attributes(opcode) on delete restrict);"""
         ]
 
