@@ -408,7 +408,7 @@ def start_server():
             recovered = 0
             now_t = time.time()
             for fd, ts in suspended:
-                if now_t - ts > 10:
+                if now_t - ts > 1:
                     # Ensure that we still have a valid cache entry for this fd
                     # This will handle situations where the interface was deleted after being suspended
                     ifcache_entry = ifcache.fetch_ifcache_by_fd(fd)
