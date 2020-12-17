@@ -626,12 +626,14 @@ def process_relay_server_msg(ifname: str, payload: Message.RelayServerDHCP6,
 def process_dhcp6_packet(ifname: str, dhcp6_msg: Message, server_mac: Mac, src_mac: Mac) -> Optional[bytes]:
     payload = dhcp6_msg.data
     server_duid = struct.pack(">HH", 3, 1) + binascii.unhexlify((str(server_mac)).replace(":",""))
+    direct_unicast_from_client = False
     if isinstance(payload, Message.ClientServerDHCP6):
         pkt = process_client_server_msg(ifname, payload, server_duid, src_mac)
+        direct_unicast_from_client = True
     elif isinstance(payload, Message.RelayServerDHCP6):
         pkt = process_relay_server_msg(ifname, payload, server_duid, src_mac)
     else:
         logger.error("Malformed packet with unknown DHCP msg type %d received", type(payload))
         pkt = None
 
-    return pkt
+    return (pkt, direct_unicast_from_client)

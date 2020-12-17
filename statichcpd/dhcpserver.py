@@ -17,6 +17,7 @@ import dpkt
 from ctypes import create_string_buffer, addressof
 from struct import pack
 import psutil
+import time
 
 from .dhcp_packet_mgr import process_dhcp_packet
 from .dhcp6_packet_mgr import process_dhcp6_packet
@@ -31,11 +32,15 @@ from .dhcp6 import *
 any_nlmsg = TypeVar('any_nlmsg', ifinfmsg, ifaddrmsg)
 server_regexobj = None
 routing_disabled = False
+dhcp_ratelimit = 1000
+
+suspended = [] # A list of tuples of the form [(fd, timestamp),]
 
 def init(config: SectionProxy) -> None:
-    global server_regexobj, routing_disabled
+    global server_regexobj, routing_disabled, dhcp_ratelimit
     server_regexobj = re.compile(config['served_interface_regex'])
     routing_disabled = config.getboolean('routing_disabled', False)
+    dhcp_ratelimit = config.getint('dhcp_ratelimit', 1000)
 
 def get_mac_address(ifname: str) -> Optional[Mac]:
     nics = psutil.net_if_addrs()
@@ -58,13 +63,13 @@ class InterfaceCacheEntry():
     def __init__(self, ifname, idx):
         self.raw_fd = None
         self.rawsock = None
-        self.v6_txsock = None
         self.ifname = ifname
         self.ip = None
         self.ip6 = None
         self.mac = None
         self.up = False
         self.idx = idx
+        self.packet_counter = 0
 
 class InterfaceCache(object):
     def __init__(self):
@@ -72,7 +77,6 @@ class InterfaceCache(object):
         self._by_ifname = {}
 
     def __del__(self):
-        logger.debug("Cleaning up interface cache")
         for entry in self._by_ifname.values():
             self.deactivate(entry)
         del self._by_fd
@@ -96,22 +100,17 @@ class InterfaceCache(object):
     def fetch_ifcache_by_ifname(self, ifname):
         return self._by_ifname.get(ifname)
 
-    def activate(self, entry, rawsock, v6_txsock):
+    def activate(self, entry, rawsock):
         if rawsock:
             entry.rawsock = rawsock
             entry.raw_fd =  rawsock.fileno()
             self._by_fd[entry.raw_fd] = entry
-        if v6_txsock:
-            entry.v6_txsock = v6_txsock
         self._by_ifname[entry.ifname] =  entry
 
     def deactivate(self, entry):
         if entry.rawsock:
             entry.rawsock.close()
-        if entry.v6_txsock:
-            entry.v6_txsock.close()
         entry.rawsock = None
-        entry.v6_txsock = None
         # Invalidate access using fd since the cache entry is deactivated
         self._by_fd[entry.raw_fd] = None
         entry.raw_fd =  None
@@ -158,40 +157,6 @@ dhcp_filter_list = [
 (0x6, 0, 0, 0x00000400),
 (0x6, 0, 0, 0x00000000),
 ]
-
-def add_v6sock_binding(ifname: str) -> Optional[socket.socket]:
-    ipr = IPRoute()
-    idx = ipr.link_lookup(ifname=ifname)[0]
-    idx_s = pack("I", idx)
-    ipr.close()
-
-    # Create a socket
-    try:
-        intf_sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-    except OSError as err:
-        logger.error("Error %s opening IPv6 UDP socket for %s.", err, ifname)
-        return None
-
-    # Set socket options and bind the socket
-    try:
-        mcast_addr = "ff02::1:2"
-        intf_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, ifname.encode())
-        intf_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, idx_s)
-        group = socket.inet_pton(socket.AF_INET6, mcast_addr) + idx_s
-        intf_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, group)
-    except OSError as err:
-        logger.error("Error %s setting IPv6 UDP socket options for %s", err, ifname)
-        intf_sock.close()
-        return None
-
-    try:
-        intf_sock.bind(('', 547))
-    except OSError as err:
-        logger.error("Error %s binding the IPv6 UDP socket for %s", err, ifname)
-        intf_sock.close()
-        return None
-    return intf_sock
-
 
 def add_rawsock_binding(ifname: str) -> Optional[socket.socket]:
     # Create a socket
@@ -244,25 +209,21 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
     if intf_rawsock is None:
         logger.error("Failed to add v4 socket binding for %s.", ifname)
 
-    intf_v6sock = ifcache_entry.v6_txsock if ifcache_entry.v6_txsock is not None else add_v6sock_binding(ifname)
-    if intf_v6sock is None:
-        logger.error("Failed to add socket binding for %s. ", ifname)
-    
-    if intf_v6sock is None or intf_rawsock is None:
+    if intf_rawsock is None:
         logger.error("Failed to open sockets for interface %s."
                      " Not servicing the interface.",
                        ifname)
         return
 
     # Activate the cache entry
-    ifcache.activate(ifcache_entry, intf_rawsock, intf_v6sock)
+    ifcache.activate(ifcache_entry, intf_rawsock)
 
     # Register with poller object
     try:
-        if intf_rawsock is not None:
+        if intf_rawsock is not None and intf_rawsock.fileno() not in [fd for (fd,ts) in suspended]:
             logger.debug("Registering raw socket fd: %d with poll", intf_rawsock.fileno())
             poller_obj.register(intf_rawsock.fileno(), POLLIN)
-        logger.info("Start servicing the interface %s", ifname)
+            logger.info("Start servicing the interface %s", ifname)
     except AttributeError as err:
         logger.error("Error %s registering %s for service", err, ifname)
         # Cleanup the socket binding and deativate the cache entry:
@@ -281,7 +242,7 @@ def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheE
 	       return
 
     try:
-        if ifcache_entry.raw_fd is not None:
+        if ifcache_entry.raw_fd is not None and ifcache_entry.raw_fd not in [fd for (fd,ts) in suspended]:
             poller_obj.unregister(ifcache_entry.raw_fd)
             logger.info("Stop servicing interface %s (raw socket fd: %d)", ifname, ifcache_entry.raw_fd)
     except KeyError as err:
@@ -298,9 +259,11 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
     if nl_event == 'RTM_NEWLINK':
         ifname = nlmsg.IFLA_IFNAME.value
         state = nlmsg.IFLA_OPERSTATE.value
-        if_mac = Mac(nlmsg.IFLA_ADDRESS.value)
         if not is_served_intf(ifname):
             return
+        if_mac = None
+        if nlmsg.IFLA_ADDRESS.value:
+            if_mac = Mac(nlmsg.IFLA_ADDRESS.value)
         ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
         if ifcache_entry is None:
             ifcache_entry = ifcache.add(ifname, if_index)
@@ -354,8 +317,19 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
 
         ifcache_entry.ip = None
 
+def ratelimit_monitor(now_t: float, ifcache_entry: InterfaceCacheEntry,
+                      poller_obj: poll) -> None:
+    if ifcache_entry.packet_counter < dhcp_ratelimit:
+        return
+    logger.info("Ratelimit Warning: Received %d packets in last one second. "
+                   "Shutting down %s for a second", 
+                   ifcache_entry.packet_counter, ifcache_entry.ifname)
+    ifcache_entry.packet_counter = 0
+    suspended.append((ifcache_entry.raw_fd, now_t))
+    poller_obj.unregister(ifcache_entry.raw_fd)
+
 def start_server():
-    global ifcache
+    global ifcache, suspended
     try:
     # 1. Create an NL socket and bind
         nlsock = IPRoute()
@@ -380,6 +354,18 @@ def start_server():
             if v4_tx_sock is not None:
                 v4_tx_sock.close()
             raise KeyboardInterrupt
+
+        try:
+            v6_tx_sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            v6_tx_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            v6_tx_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            v6_tx_sock.bind(('', 547))
+        except OSError as err:
+            logger.error("Error %s opening IPv6 UDP socket for DHCPv6 replies", err)
+            if v6_tx_sock is not None:
+                v6_tx_sock.close()
+            raise KeyboardInterrupt
+
 
     # 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
     #    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
@@ -413,10 +399,29 @@ def start_server():
                 # If state is UP, start polling irrespective of IP address configuration
                 if ifcache_entry.up:
                     activate_and_start_polling(poller_obj, ifcache_entry)
-
     # 4. Keep checking for any events on the polled FDs and process them
+        start_t = time.time()
         while True:
             fdEvent = poller_obj.poll(1024)
+            
+            # Recover all eligible FDs that were suspended earlier
+            recovered = 0
+            now_t = time.time()
+            for fd, ts in suspended:
+                if now_t - ts > 10:
+                    # Ensure that we still have a valid cache entry for this fd
+                    # This will handle situations where the interface was deleted after being suspended
+                    ifcache_entry = ifcache.fetch_ifcache_by_fd(fd)
+                    if ifcache_entry:
+                        ifcache_entry.packet_counter = 0
+                        poller_obj.register(ifcache_entry.raw_fd, POLLIN)
+                        logger.info("Ratelimit Info: Restarted servicing "
+                                    "interface %s", ifcache_entry.ifname)
+                    recovered += 1
+                else:
+                    break
+            suspended = suspended[recovered:]
+
             for fd, event in fdEvent:
                 if event & POLLIN:                    #TODO: Add code to handle other events
                     if fd == nlsock.fileno():
@@ -436,6 +441,11 @@ def start_server():
                             raise KeyboardInterrupt
                         try:
                             msg, (ifname, ethproto, pkttype, arphrd, rawmac) = intf_sock.recvfrom(1024)
+                            ifcache_entry.packet_counter += 1
+                            now_t = time.time()
+                            if now_t - start_t > 1:
+                                ratelimit_monitor(now_t, ifcache_entry, poller_obj)
+                                start_t = now_t
                         except OSError as err:
                             logger.error("Error %s receiving packet on %s. "
                                          " Stop servicing interface.", err, ifname)
@@ -522,12 +532,22 @@ def start_server():
                         try:
                             if len(udp.data) > 0:
                                 dhcp6_msg = Message(udp.data)
-                                pkt = process_dhcp6_packet(ifname, dhcp6_msg, ifcache_entry.mac, Mac(rawmac))
+                                (pkt, direct_unicast_from_client)= process_dhcp6_packet(ifname, dhcp6_msg, 
+                                                                           ifcache_entry.mac, Mac(rawmac))
                                 if pkt is None:
                                     logger.debug("No DHCP6 response sent for packet on %s", ifname)
                                     continue
                                 destination_ip = str(IPv6Address(ip.src))
-                                ifcache_entry.v6_txsock.sendto(pkt, (destination_ip, udp.sport))
+                                if direct_unicast_from_client:
+                                    logger.debug("Direct unicast from client: Unicast reply to %s through interface %s",
+                                                  destination_ip, ifname)
+                                    pktinfo = pack('=16sI', bytes(0), ifcache_entry.idx)
+                                    SOL_IP6_PKTINFO = 50
+                                    v6_tx_sock.sendmsg([pkt],
+                                                   [(socket.IPPROTO_IPV6, SOL_IP6_PKTINFO, pktinfo)],
+                                                   0, (destination_ip, udp.sport))
+                                else:
+                                    v6_tx_sock.sendto(pkt, (destination_ip, udp.sport))
                         except OSError as err:
                             logger.error("Error %s sending packet on %s. "
                                          "Stop servicing the interface.", err, ifname)
