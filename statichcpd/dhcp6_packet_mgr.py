@@ -436,8 +436,6 @@ def fetch_client_duid(client_duid: str) -> str:
     #                                                     or DUID_Type + Enterprise_Num + ID
     # eg: DUID_Type=1, Hardware_Type=1 and LL_Addr = 5a:20:9d:28:56:e5 => DUID = 115a209d2856e5
 
-    # Why not have just the LL address as client_id ?? What about DUID type 2??
-
     if duid_type == DUID.lladdr_time.value: # Static HCPD server cannot server client DUID with dynamic value (time)
         client_id = ''.join(str(elem) for elem in struct.unpack('>HH', client_duid[:4])) + \
                     ll_addr(client_duid[8:])
@@ -485,7 +483,7 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
     data = bytes(dhcp_response)
     return data
 
-def process_request_renew_rebind_msg(ifname: str, msg: Message.ClientServerDHCP6, 
+def process_request_renew_rebind_info_msg(ifname: str, msg: Message.ClientServerDHCP6, 
                                      server_duid: str, src_mac: Mac) -> Optional[bytes]:
     client_duid = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
     # TODO: If it's unicast and unicast is not supported for this client,
@@ -511,7 +509,7 @@ def process_request_renew_rebind_msg(ifname: str, msg: Message.ClientServerDHCP6
         logger.error("No response DHCP6 Reply packet for %s "
                       "on interface %s for client %s",
                       msg.mtype,
-                      ifname, client_mac)
+                      ifname, client_id)
         return None
     data = bytes(dhcp_response)
     return data
@@ -550,7 +548,7 @@ def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6, server_duid
         logger.error("No response DHCP6 Reply packet for %s"
                       "on interface %s for client %s",
                       msg.mtype,
-                      ifname, client_mac)
+                      ifname, client_id)
         return None
     data = bytes(dhcp_response)
     return data
@@ -573,18 +571,11 @@ def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6, serve
 
     if msg.mtype is SOLICIT:
         return process_solicit_msg(ifname, msg, server_duid, src_mac)
-    if msg.mtype is REQUEST or msg.mtype is RENEW or msg.mtype is REBIND:
-        return process_request_renew_rebind_msg(ifname, msg, server_duid, src_mac)
+    if msg.mtype is REQUEST or msg.mtype is RENEW or \
+       msg.mtype is REBIND or msg.mtype is INFORMATIONREQUEST:
+        return process_request_renew_rebind_info_msg(ifname, msg, server_duid, src_mac)
     if msg.mtype is CONFIRM:
         return process_confirm_msg(ifname, msg, server_duid, src_mac)
-    '''
-    if msg.mtype is DECLINE:
-        return process_decline_msg(ifname, payload)
-    if msg.mtype is RELEASE:
-        return process_release_msg(ifname, payload)
-    if msg.mtype is INFORMATIONREQUEST:
-        return process_inforequest_msg(ifname, payload)
-    '''
     return None
 
 def process_relayforw_msg(ifname: str, payload: Message.RelayServerDHCP6, 
