@@ -35,6 +35,7 @@ routing_disabled = False
 dhcp_ratelimit = 1000
 
 suspended = [] # A list of tuples of the form [(fd, timestamp),]
+ratelimiter = {} # A dictionary of RateLimiter objects indexed by socket fd
 
 def init(config: SectionProxy) -> None:
     global server_regexobj, routing_disabled, dhcp_ratelimit
@@ -50,6 +51,12 @@ def get_mac_address(ifname: str) -> Optional[Mac]:
             if i.family == psutil.AF_LINK:
                 return Mac(i.address)
     return None
+
+class RateLimiter():
+    def __init__(self, ts, tokens):
+        self.last_pkt_ts = ts
+        self.pkt_tokens = tokens
+
 
 # An interface cache entry exists only for an interface whose state is UP
 # OR has a valid IP address configured. At any point, if the interface state
@@ -69,7 +76,6 @@ class InterfaceCacheEntry():
         self.mac = None
         self.up = False
         self.idx = idx
-        self.packet_counter = 0
 
 class InterfaceCache(object):
     def __init__(self):
@@ -317,16 +323,32 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
 
         ifcache_entry.ip = None
 
+# Packet tokens will be credited to each file descriptor at the rate of
+# configured dhcp_ratelimit. Insufficient number of tokens is a sign of
+# packet burst and the interface will be suspended for one second
+
 def ratelimit_monitor(now_t: float, ifcache_entry: InterfaceCacheEntry,
                       poller_obj: poll) -> None:
-    if ifcache_entry.packet_counter < dhcp_ratelimit:
+    if ifcache_entry.raw_fd not in ratelimiter:
+        ratelimiter[ifcache_entry.raw_fd] = RateLimiter(now_t, 0)
         return
-    logger.info("Ratelimit Warning: Received %d packets in last one second. "
-                   "Shutting down %s for a second", 
-                   ifcache_entry.packet_counter, ifcache_entry.ifname)
-    ifcache_entry.packet_counter = 0
-    suspended.append((ifcache_entry.raw_fd, now_t))
-    poller_obj.unregister(ifcache_entry.raw_fd)
+
+    rl_entry = ratelimiter[ifcache_entry.raw_fd]
+    rl_entry.pkt_tokens += (now_t - rl_entry.last_pkt_ts) * dhcp_ratelimit
+
+    if rl_entry.pkt_tokens < 1:
+        logger.info("Ratelimit Warning: Burst of packets on %s from %s.%03d to %s.%03d. "
+                    "Shutting down for a second", 
+                    ifcache_entry.ifname, 
+                    time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(rl_entry.last_pkt_ts/1000)), 
+                    rl_entry.last_pkt_ts%1000, 
+                    time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now_t/1000)),
+                    now_t%1000)
+        suspended.append((ifcache_entry.raw_fd, now_t))
+        poller_obj.unregister(ifcache_entry.raw_fd)
+    else:
+        rl_entry.pkt_tokens -= 1
+    rl_entry.last_pkt_ts = now_t
 
 def start_server():
     global ifcache, suspended
@@ -413,7 +435,6 @@ def start_server():
                     # This will handle situations where the interface was deleted after being suspended
                     ifcache_entry = ifcache.fetch_ifcache_by_fd(fd)
                     if ifcache_entry:
-                        ifcache_entry.packet_counter = 0
                         poller_obj.register(ifcache_entry.raw_fd, POLLIN)
                         logger.info("Ratelimit Info: Restarted servicing "
                                     "interface %s", ifcache_entry.ifname)
@@ -441,11 +462,8 @@ def start_server():
                             raise KeyboardInterrupt
                         try:
                             msg, (ifname, ethproto, pkttype, arphrd, rawmac) = intf_sock.recvfrom(1024)
-                            ifcache_entry.packet_counter += 1
                             now_t = time.time()
-                            if now_t - start_t > 1:
-                                ratelimit_monitor(now_t, ifcache_entry, poller_obj)
-                                start_t = now_t
+                            ratelimit_monitor(now_t, ifcache_entry, poller_obj)
                         except OSError as err:
                             logger.error("Error %s receiving packet on %s. "
                                          " Stop servicing interface.", err, ifname)
