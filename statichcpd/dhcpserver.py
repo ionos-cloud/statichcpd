@@ -551,7 +551,8 @@ def start_server():
                                 (pkt, direct_unicast_from_client)= process_dhcp6_packet(ifname, dhcp6_msg, 
                                                                            ifcache_entry.mac, Mac(rawmac))
                                 if pkt is None:
-                                    logger.debug("No DHCP6 response sent for packet on %s", ifname)
+                                    logger.debug("No DHCP6 response sent for packet on %s from %s", 
+                                                  ifname, Mac(rawmac))
                                     continue
                                 destination_ip = str(IPv6Address(ip.src))
                                 if direct_unicast_from_client:
