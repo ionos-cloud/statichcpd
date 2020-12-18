@@ -255,6 +255,8 @@ def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheE
         logger.error("Error %s deregistering %s from service", err, ifname)
         return
 
+    if ifcache_entry.raw_fd in ratelimiter:
+        del ratelimiter[ifcache_entry.raw_fd]
     ifcache.deactivate(ifcache_entry)
 
 def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
@@ -337,13 +339,9 @@ def ratelimit_monitor(now_t: float, ifcache_entry: InterfaceCacheEntry,
     rl_entry.pkt_tokens += (now_t - rl_entry.last_pkt_ts) * dhcp_ratelimit
 
     if rl_entry.pkt_tokens < 1:
-        logger.info("Ratelimit Warning: Burst of packets on %s from %s.%03d to %s.%03d. "
+        logger.info("Ratelimit Warning: Burst of packets on %s. "
                     "Shutting down for a second", 
-                    ifcache_entry.ifname, 
-                    time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(rl_entry.last_pkt_ts/1000)), 
-                    rl_entry.last_pkt_ts%1000, 
-                    time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now_t/1000)),
-                    now_t%1000)
+                    ifcache_entry.ifname)
         suspended.append((ifcache_entry.raw_fd, now_t))
         poller_obj.unregister(ifcache_entry.raw_fd)
     else:
