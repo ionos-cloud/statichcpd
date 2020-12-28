@@ -2,6 +2,8 @@ import unittest
 from time import sleep
 import tracemalloc
 from ipaddress import IPv4Address, AddressValueError
+from unittest import skipUnless
+from os import geteuid
 
 from test.common import fill_db, Config, server_process, packet_sender
 
