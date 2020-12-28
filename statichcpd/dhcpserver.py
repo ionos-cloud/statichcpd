@@ -570,4 +570,8 @@ def start_server():
     except KeyboardInterrupt:
         exit()
         del ifcache
+        if v4_tx_sock:
+            v4_tx_sock.close()
+        if v6_tx_sock:
+            v6_tx_sock.close()
         logger.info("Server exiting..")
