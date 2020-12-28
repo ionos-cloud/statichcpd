@@ -179,22 +179,22 @@ DHCP6_UseMulticast = 5
 
 # Message type dictionaries used for classifying packets and for prints
 
-client_server_msgs: Dict = {SOLICIT : "SOLICIT",
-                           ADVERTISE : "ADVERTISE",
-                           REQUEST : "REQUEST",
-                           CONFIRM : "CONFIRM",
-                           RENEW : "RENEW",
-                           REBIND : "REBIND",
-                           REPLY : "REPLY",
-                           RELEASE : "RELEASE",
-                           DECLINE: "DECLINE",
-                           RECONFIGURE: "RECONFIGURE",
-                           INFORMATIONREQUEST: "INFORMATIONREQUEST"
-                           }
+client_server_msgs = {SOLICIT : "SOLICIT",
+                      ADVERTISE : "ADVERTISE",
+                      REQUEST : "REQUEST",
+                      CONFIRM : "CONFIRM",
+                      RENEW : "RENEW",
+                      REBIND : "REBIND",
+                      REPLY : "REPLY",
+                      RELEASE : "RELEASE",
+                      DECLINE: "DECLINE",
+                      RECONFIGURE: "RECONFIGURE",
+                      INFORMATIONREQUEST: "INFORMATIONREQUEST"
+                     }
 
-relay_server_msgs: Dict = {RELAYFORW: "RELAYFORW",
-                           RELAYREPL: "RELAYREPL"
-                          }
+relay_server_msgs = {RELAYFORW: "RELAYFORW",
+                     RELAYREPL: "RELAYREPL"
+                    }
 
 
 class Message(dpkt.Packet):
