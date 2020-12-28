@@ -10,8 +10,6 @@ import re
 from pyroute2 import NSPopen, netns, NetNS, IPRoute
 import subprocess
 import os
-import signal
-import psutil
 
 from statichcpd.database_manager import *
 from pyroute2.netlink.exceptions import NetlinkError
@@ -217,7 +215,6 @@ def create_dhcp_database(mac: List[str], ifname: List[str],
                          v6_attr_lists: List[List[Tuple[str, str]]]) -> None:
     global conn
     if conn is None:
-        #conn = sqlite3.connect('/tmp/Static_DHCP_DB.db')
         conn = sqlite3.connect('/tmp/Static_DHCP_DB.db')
     cursor = conn.cursor()
     for command in schema:

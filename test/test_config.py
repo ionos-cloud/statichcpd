@@ -8,6 +8,7 @@ from test.common import fill_db, Config, server_process, packet_sender
 tracemalloc.start()
 
 class TestStatichcpdMethods(unittest.TestCase):
+    @skipUnless(geteuid() == 0, "Unable to run test without root access")
     def test_dhcp_conf(self):
         with Config() as cfg:
             fill_db(cfg)
