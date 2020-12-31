@@ -257,6 +257,7 @@ def process_dhcp_request(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: st
     except AddressValueError:
         server_id_in_request = IPv4Address(0)
     ciaddr_in_request = dhcp_obj.ciaddr
+    client_ip = None
     requested_ip = fetch_dhcp_req_ip(dhcp_obj)
     client_state = fetch_client_state(server_id_in_request, ciaddr_in_request, requested_ip)
     logger.debug("Based on DHCP Request opts, client %s is in %s state",
@@ -305,13 +306,18 @@ def process_dhcp_request(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: st
                             offer_ip == requested_ip)
         else:
             # If the client is in RENEWING or REBINDING state, request IP is not filled
-            # So, respond back with available data
+            # So, validate the available address allocation with client_ip (ciaddr)
             is_valid_request = True
             if not offer_ip:
                 logger.debug("DHCP-Request: No offer IP found for client %s in %s state on intf %s",
                              str(client_mac), client_state.name, ifname)
                 is_valid_request = False
-
+            else:
+                # In renew/rebind state the client will have a valid ciaddr
+                client_ip = IPv4Address(ciaddr_in_request)
+                is_valid_request = (client_ip and not client_ip.is_unspecified and
+                                    not offer_ip.is_unspecified and
+                                    offer_ip == client_ip)
     dhcp_packet = None
 
     if is_valid_request:
@@ -322,7 +328,8 @@ def process_dhcp_request(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: st
     else:
         request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
         if client_state is not state.INVALID:
-            logger.debug("Requested IP (%s) doesn't match available IP (%s)", requested_ip, offer_ip)
+            logger.debug("Requested IP (%s) doesn't match available IP (%s)", 
+                          requested_ip if requested_ip is not None else client_ip, offer_ip)
         dhcp_packet = construct_dhcp_nak(dhcp_obj, ifname, server_id, requested_ip, request_list_opt, host_conf_data)
 
     if dhcp_packet is None:
