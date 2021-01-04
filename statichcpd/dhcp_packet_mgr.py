@@ -164,7 +164,7 @@ def construct_dhcp_offer(dhcp_obj: dhcp.DHCP, ifname: str, server_id: IPv4Addres
                          host_conf_data: Dict[str, str]) -> Optional[dhcppacket_type]:
     opt_list = construct_dhcp_opt_list(request_list_opt, ifname, host_conf_data)
     if offer_ip is None and not opt_list: # If no other parameters were requested by client, should offer be sent?
-        return (None, None)
+        return None
     opt_list = append_mandatory_options(dhcp_obj, opt_list, dhcp.DHCPOFFER, server_id)
     return construct_dhcp_packet(dhcp_obj, offer_ip, opt_list)
 
