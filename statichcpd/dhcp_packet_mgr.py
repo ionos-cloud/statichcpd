@@ -214,7 +214,18 @@ def process_dhcp_discover(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: s
                       "on interface %s for client %s", ifname, client_mac)
         return (None, None, None)
 
-    data = bytes(dhcp_offer)
+    # Follows a temporary workaround for
+    # "TypeError: 'NoneType' object cannot be interpreted as an integer"
+    # crash.
+    try:
+        data = bytes(dhcp_offer)
+    except TypeError as e:
+        logger.exception("Crash coverting dhcp_offerto bytes: dhcp_offer=%s,"
+                         " dhcp_offer.opts=%s, dhcpoffer.data=%s",
+                         dhcp_offer,
+                         getattr(dhcp_offer, 'opts', "No opts attr"),
+                         getattr(dhcp_offer, 'data', "No data attr"))
+        return (None, None, None)
     addr = fetch_destination_address(dhcp_obj)
     return (data, addr, server_id)
 
