@@ -1,0 +1,14 @@
+Static_DHCP_DB.db
+*.pyc
+*.egg-info
+.*
+MANIFEST
+build
+dist
+DEBIAN
+debian/*.debhelper
+debian/*.substvars
+debian/*.log
+debian/*-stamp
+debian/files
+debian/*/
