@@ -1,0 +1,27 @@
+This documents is intended to convey the expected behavior of statichcpd server in certain scenarios and the reasons behind that.
+
+Hosts with multiple public NICs in different networks:
+-----------------------------------------------------
+
+The statichcpd server uses a combination of MAC address and interface name as client identifier, assuming each interface is mapped to a network. As a result, clients with same MAC address connected to different networks are rightly identified as independent clients. 
+
+When a statichcpd client tries to renew its configurations via unicast, it sends IP packet that goes through the client's IP stack, and gets routed. If the statichcpd server address falls outside the network for public IP addresses, it is routed via the client's default route. 
+
+Now, consider a configuration where we have a host with two public NICs (eg: ens6 and ens7) in different networks (VlanA and VlanB). The default route for this host will be through any one of these interfaces (eg: default via <nexthop_ip> dev ens7). 
+
+As a result, unicast DHCP renewals from one of these clients, always exits through the wrong interface (i.e. with a default route of “default via <nexthop_ip> dev ens7 “, unicast DHCP requests from client on ens6 with MacA (VlanA) exits through ens7 (VlanB) as per the default route).
+
+So, from the statichcpd server’s point of view, the server receives a renewal request from client with MacA on VlanB. The client configuration lookup with the key <MacA, VlanB> fails since the server has an entry for Mac A in Vlan A, and not in Vlan B (And as we support the use of the same MAC in different networks, we cannot really consider them to be the same!). So, the server fails to find a configuration for this client and hence, doesn’t respond.  
+
+On the other hand, if the two public NICs were in the same network (say, VlanA), the server would behave normally since it receives packets from both clients on the same vlan (VlanA) irrespective of which interface the default route is pinned to. 
+
+For this reason, with the use of statichcpd server, any host is recommended to have all its public NICs in the same network.
+
+Client migration from one network to another:
+--------------------------------------------
+
+When the statichcpd client is in INIT state, all the packets sent by client are broadcasted and hence, MAC address of the server is not learnt. Before the client hits lease timeout, it starts sending unicast DHCP REQUEST msgs to the server IP address for lease renewal. At this point, the MAC address of the server is resolved through ARP request.
+
+After a client has migrated to a new network, it tries to send renewal request to the old statichcpd server address as per its lease information. At this point, if the client already has the MAC address corresponding to the old server IP, it simply sends the REQUEST for renewing the old IP address on the new network. Since the statichcpd server listens on raw sockets, it is able to receive this REQUEST message inspite of the wrong destination parameters. As a result, the new server sends back a NAK if the requested IP address is different from the available address for this client. On receiving NAK,  the client removes its lease information and starts over again by broadcasting a DISCOVER message, which is answered by the new server. This facilitates a fast switchover mechanism.
+
+However, this is not applicable if the client requires ARP resolution for the old server IP address after migration to a new network. In this case, the client fails to resolve ARP in the new network even after multiple attempts. Once the timeout is hit, the client broadcasts DHCP REQUEST message in its new network, which is answered by the new statichcpd server with a NAK (if the requested and available configurations do not match). The client then starts over again by broadcasting DHCP Discover message to get its new configurations.
