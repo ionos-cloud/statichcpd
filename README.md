@@ -27,17 +27,16 @@ controller-populated tables: "clients", "client\_attributes" and
 DHCP option, or one of the "special" keys for the IP addresses and
 other "non-option" attributes, namely:
 
-    IPv4 address: <TODO>
-    IPv6 address: <TODO>
+    IPv4 address: 256
 
 Client-specific non-default values:
 
-    server-identifier: <TODO>
+    server-identifier: 258
     DHCPv6 lease timeout values:
-      T1: <TODO>
-      T2: <TODO>
-      preferred lifetime: <TODO>
-      valid lifetime: <TODO>
+      T1: 259
+      T2: 260
+      preferred lifetime: 261
+      valid lifetime: 262
 
 The table "clients" is used as the place with foreign keys for the
 entries in the "client\_\*attributes" tables; because of sqlite
