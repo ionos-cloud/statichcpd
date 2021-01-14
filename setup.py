@@ -16,6 +16,6 @@ setup(
     packages=['statichcpd'],
     install_requires=['dpkt', 'pyroute2'],
     license='MIT',
-    long_description=open('README.txt').read(),
+    long_description=open('README.md').read(),
 )
 
