@@ -200,7 +200,7 @@ relay_server_msgs = {RELAYFORW: "RELAYFORW",
 class Message(dpkt.Packet):
     __hdr__ = ()
     opts = ( )
-    __hdr_len__: int # Important: Check for collaterals
+    __hdr_len__: int
 
     def __len__(self) -> int:
         return self.__hdr_len__ + sum([2 + len(o[1]) \
@@ -264,7 +264,7 @@ class Message(dpkt.Packet):
                     n = int.from_bytes(buf[2:4], byteorder='big')
                     l.append((t, buf[4:4 + n]))
                     buf = buf[4 + n:]
-            self.opts = tuple(l) # Important; Verify for collateral
+            self.opts = tuple(l)
             self.data = buf
 
     class RelayServerDHCP6(dpkt.Packet):
@@ -337,10 +337,10 @@ class Message(dpkt.Packet):
                     n = int.from_bytes(buf[2:4], byteorder='big')
                     l.append((t, buf[4:4 + n]))
                     buf = buf[4 + n:]
-            self.opts = tuple(l) # Important ; Check for collaterals
+            self.opts = tuple(l)
             #self.data = buf
 
-    data: Union[bytes, ClientServerDHCP6, RelayServerDHCP6] # Important ; Verify!
+    data: Union[bytes, ClientServerDHCP6, RelayServerDHCP6]
     def unpack(self, buf: bytes) -> None:
         dpkt.Packet.unpack(self, buf)
         try:

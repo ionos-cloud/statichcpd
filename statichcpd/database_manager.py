@@ -74,7 +74,7 @@ class dtype(Enum):
     IA = 7
     PD = 8
 
-class DHCPv4DB(object): #Important
+class DHCPv4DB(object):
     select_command = """ select valid_attributes.opcode, valid_attributes.max_count,
                          valid_attributes.datatype, client_configuration.attr_val
                          from client_configuration
@@ -83,7 +83,7 @@ class DHCPv4DB(object): #Important
                          where ifname=? and mac=?"""
 
  
-class DHCPv6DB(object): #Important
+class DHCPv6DB(object):
     select_command = """ select valid_v6attributes.opcode, valid_v6attributes.max_count,
                          valid_v6attributes.datatype, client_v6configuration.attr_val
                          from client_v6configuration

@@ -256,7 +256,7 @@ def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheE
 
 def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
     nl_event = nlmsg['event']
-    if_index = int(nlmsg['index']) # Important! Check for collateral.
+    if_index = int(nlmsg['index'])
     if nl_event not in ['RTM_NEWLINK', 'RTM_DELLINK', 'RTM_NEWADDR', 'RTM_DELADDR']:
         return
     if nl_event == 'RTM_NEWLINK':

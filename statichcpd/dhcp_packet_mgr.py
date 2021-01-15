@@ -71,7 +71,7 @@ def fetch_destination_address(dhcp_obj: dhcp.DHCP, ifname: str) -> Optional[IPv4
     try:
         if not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
             # Client with valid IP in Renewal state, unicast
-            addr = IPv4Address(dhcp_obj.ciaddr) # Important ; Check for collateral
+            addr = IPv4Address(dhcp_obj.ciaddr)
         elif not IPv4Address(dhcp_obj.giaddr).is_unspecified:
             # Packet was gatewayed; Unicast to gateway
             addr = IPv4Address(dhcp_obj.giaddr)
@@ -144,9 +144,9 @@ def construct_dhcp_opt_list(request_list_opt: List[int], ifname: str,
                     encoded_data = b''.join([bytes(elem) for elem in data])
                 else:
                     logger.error("Elements of unexpected datatype "
-                                 "in the client parameter list: %s", data) # Important
+                                 "in the client parameter list: %s", data)
             else:
-                logger.error("Value(%s) of unexpected type received for opcode %d", data, opcode) # Important
+                logger.error("Value(%s) of unexpected type received for opcode %d", data, opcode)
             if encoded_data:
                 opt_list.append((opcode, encoded_data))
     return tuple(opt_list)
@@ -235,7 +235,7 @@ def process_dhcp_discover(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: s
                          getattr(dhcp_offer, 'opts', "No opts attr"),
                          getattr(dhcp_offer, 'data', "No data attr"))
         return (None, None, IPv4Address(0))
-    addr = fetch_destination_address(dhcp_obj, ifname) # Important
+    addr = fetch_destination_address(dhcp_obj, ifname)
     return (data, addr, server_id)
 
 # In case of DHCP Request
@@ -362,7 +362,7 @@ def process_dhcp_request(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: st
         return (None, None, IPv4Address(0))
 
     data = bytes(dhcp_packet)
-    addr = fetch_destination_address(dhcp_obj, ifname) #Important
+    addr = fetch_destination_address(dhcp_obj, ifname)
     return (data, addr, server_id)
 
 def process_dhcp_inform(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: str) -> Tuple[Optional[bytes],
@@ -387,7 +387,7 @@ def process_dhcp_inform(dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: str
                      "on interface %s for client %s", ifname, client_mac)
         return (None, None, IPv4Address(0))
     data = bytes(dhcp_packet)
-    addr = fetch_destination_address(dhcp_obj, ifname) # Important
+    addr = fetch_destination_address(dhcp_obj, ifname)
     return (data, addr, server_id)
 
 def build_frame(dhcp_data: bytes, dest_mac: Mac, dest_ip: IPv4Address,
@@ -395,7 +395,7 @@ def build_frame(dhcp_data: bytes, dest_mac: Mac, dest_ip: IPv4Address,
     dh = dpkt.dhcp.DHCP(dhcp_data)
     udp = dpkt.udp.UDP(sport=67, dport=68, data=bytes(dh))
     udp.ulen = len(udp)
-    ip = dpkt.ip.IP(dst=dest_ip.packed, # Important; Check collateral
+    ip = dpkt.ip.IP(dst=dest_ip.packed,
                     src=IPv4Address(src_ip).packed,
                     ttl=64,
                     p=dpkt.ip.IP_PROTO_UDP,

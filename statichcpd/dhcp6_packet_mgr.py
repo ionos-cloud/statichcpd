@@ -29,12 +29,12 @@ default_valid_lifetime = 0
 def init(config: SectionProxy) -> None:
     global use_mac_as_duid, disable_ia_id
     global default_t1, default_t2, default_pref_lifetime, default_valid_lifetime
-    use_mac_as_duid = config.getboolean('use_mac_as_client_duid', fallback=False) # Important
-    disable_ia_id = config.getboolean('disable_ia_id', fallback=False) # Important
-    default_t1 = config.getint('default_renew_time', fallback=1000) #Important
-    default_t2 = config.getint('default_rebind_time', fallback=2000) #Important
-    default_pref_lifetime = config.getint('default_pref_lifetime', fallback=3000) #Important
-    default_valid_lifetime = config.getint('default_valid_lifetime', fallback=4000) #Important
+    use_mac_as_duid = config.getboolean('use_mac_as_client_duid', fallback=False)
+    disable_ia_id = config.getboolean('disable_ia_id', fallback=False)
+    default_t1 = config.getint('default_renew_time', fallback=1000)
+    default_t2 = config.getint('default_rebind_time', fallback=2000)
+    default_pref_lifetime = config.getint('default_pref_lifetime', fallback=3000)
+    default_valid_lifetime = config.getint('default_valid_lifetime', fallback=4000)
  
 # Message Validation: RFC 3315 Section 15
 
@@ -42,7 +42,7 @@ def validate_msg(msg: Message.ClientServerDHCP6,
                  server_duid: bytes) -> bool:
     if msg.mtype in [SOLICIT, CONFIRM, REBIND] :
         return fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID) is not None and \
-               fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) is None # Important
+               fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) is None
     elif msg.mtype in [REQUEST, RENEW, DECLINE, RELEASE]:
         return fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) is not None and \
                fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID) is not None and \
@@ -450,7 +450,7 @@ def construct_dhcp6_opt_list(msg: Message.ClientServerDHCP6,
             else:
                 logger.error("Client:%s Ifname:%s Value(%s) of unexpected type "
                              "received for opcode %d", client_id, ifname, data, opcode)
-            if encoded_data: # Important; Vreify for collaterals
+            if encoded_data:
                 opt_list.append((opcode, encoded_data))
     return tuple(opt_list)
 
@@ -504,7 +504,7 @@ def fetch_client_duid(client_duid: Optional[bytes]) -> str:
         # Should the value be stored as int or hex in DB?
         client_id = ''.join(str(elem) for elem in struct.unpack('>H', client_duid[:2])) + \
                     ''.join(str(elem) for elem in struct.unpack('>%iH'%(len(client_duid[2:6])/ 2), client_duid[2:6])) + \
-                    ''.join(str(elem) for elem in struct.unpack('>%iH'%(len(client_duid[6:])/2), client_duid[6:])) #Important
+                    ''.join(str(elem) for elem in struct.unpack('>%iH'%(len(client_duid[6:])/2), client_duid[6:]))
     return client_id
 
 def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6, 
@@ -587,14 +587,14 @@ def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6,
         logger.debug("Client:%s Ifname:%s No configuration data found for the host. Skipping ..", client_id, ifname)
         return None
 
-    encoded_ia_na: Optional[bytes] = b'' # Important
-    encoded_ia_ta: Optional[bytes] = b'' # Important
-    if DHCP6_OPT_IA_NA in msg.opts: 
+    encoded_ia_na: Optional[bytes] = b''
+    encoded_ia_ta: Optional[bytes] = b''
+    if DHCP6_OPT_IA_NA in msg.opts:
         encoded_ia_na  = construct_ia_na_response_data(msg, host_conf_data.get(DHCP6_OPT_IA_NA, None),
-                                                            host_conf_data, ifname, client_id) # Important
+                                                            host_conf_data, ifname, client_id)
     if DHCP6_OPT_IA_TA in msg.opts:
         encoded_ia_ta = construct_ia_ta_response_data(msg, host_conf_data.get(DHCP6_OPT_IA_TA, None), 
-                                                           host_conf_data, ifname, client_id) # Important
+                                                           host_conf_data, ifname, client_id)
 
     opt_list: Tuple[Tuple[int, bytes],...] = ((DHCP6_OPT_STATUS_CODE, struct.pack(">H", DHCP6_Success)),)
     
