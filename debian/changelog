@@ -1,4 +1,4 @@
-statichcpd (2.0) all-xenial-jessie; urgency=medium
+statichcpd (2.0) all-stretch; urgency=medium
 
   * Added support to handle DHCPINFORM
   * Server ID validation
@@ -11,7 +11,7 @@ statichcpd (2.0) all-xenial-jessie; urgency=medium
 
  -- Reshma Sreekumar <reshma.sreekumar@cloud.ionos.com>  Tue, 01 Dec 2020 17:09:37 +0100
 
-statichcpd (1.0) all-xenial-jessie; urgency=medium
+statichcpd (1.0) all-stretch; urgency=medium
 
   [ Reshma Sreekumar ]
   * Initial release. 
