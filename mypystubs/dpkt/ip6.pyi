@@ -1,0 +1,4 @@
+import dpkt
+
+class IP6(dpkt.Packet):
+    ...

@@ -4,7 +4,7 @@ from dpkt.compat import compat_ord
 from enum import Enum
 import struct
 from .logmgr import logger
-from typing import Dict, Any
+from typing import Dict, Any, Tuple, Optional, Union, Iterable, cast
 
 
 # DHCP6 Options: RFC 3315 Section 22
@@ -200,14 +200,19 @@ relay_server_msgs = {RELAYFORW: "RELAYFORW",
 class Message(dpkt.Packet):
     __hdr__ = ()
     opts = ( )
+    __hdr_len__: int # Important: Check for collaterals
 
-    def __len__(self):
-        return self.__hdr_len__ + \
-           sum([2 + len(o[1]) for o in self.opts]) + 1 + len(self.data)
+    def __len__(self) -> int:
+        return self.__hdr_len__ + sum([2 + len(o[1]) \
+               for o in cast(Iterable[Tuple[Tuple[int, bytes],...]], self.opts)]) + 1 + len(self.data)
 
 
 
     class ClientServerDHCP6(dpkt.Packet):
+        mtype: int
+        xid: bytes
+        data: bytes
+
         '''
 
         0                   1                   2                   3
@@ -227,12 +232,12 @@ class Message(dpkt.Packet):
             ('xid', '3s', b'\x00' * 3)
         )
         
-        opts = ( ) # list of (type, data) tuples
+        opts: Tuple[Tuple[int, bytes], ...] = ( ) # tuple of (type, data) tuples
 
-        def __bytes__(self):
+        def __bytes__(self) -> bytes:
             return self.pack_hdr() + self.pack_opts() + bytes(self.data)
 
-        def pack_opts(self):
+        def pack_opts(self) -> bytes:
             """Return packed options string."""
             if not self.opts:
                 return b''
@@ -243,7 +248,7 @@ class Message(dpkt.Packet):
             return b''.join(l)
 
 
-        def unpack(self, buf):
+        def unpack(self, buf: bytes) -> None:
             dpkt.Packet.unpack(self, buf)
             buf = self.data
             
@@ -259,10 +264,16 @@ class Message(dpkt.Packet):
                     n = int.from_bytes(buf[2:4], byteorder='big')
                     l.append((t, buf[4:4 + n]))
                     buf = buf[4 + n:]
-            self.opts = l
+            self.opts = tuple(l) # Important; Verify for collateral
             self.data = buf
 
     class RelayServerDHCP6(dpkt.Packet):
+        mtype: int
+        hops: int
+        la: str
+        pa: str
+        data: bytes
+        
         '''
 
           0                   1                   2                   3
@@ -294,12 +305,12 @@ class Message(dpkt.Packet):
             ('pa', '16s', '')
         )
         
-        opts = ( ) # list of (type, data) tuples
+        opts: Tuple[Tuple[int, bytes],...] = ( ) # tuple of (type, data) tuples
 
-        def __bytes__(self):
+        def __bytes__(self) -> bytes:
             return self.pack_hdr() + self.pack_opts() + bytes(self.data)
 
-        def pack_opts(self):
+        def pack_opts(self) -> bytes:
             """Return packed options string."""
             if not self.opts:
                 return b''
@@ -310,7 +321,7 @@ class Message(dpkt.Packet):
             return b''.join(l)
 
 
-        def unpack(self, buf):
+        def unpack(self, buf: bytes) -> None:
             dpkt.Packet.unpack(self, buf)
             buf = self.data
             
@@ -326,20 +337,11 @@ class Message(dpkt.Packet):
                     n = int.from_bytes(buf[2:4], byteorder='big')
                     l.append((t, buf[4:4 + n]))
                     buf = buf[4 + n:]
-            self.opts = l
+            self.opts = tuple(l) # Important ; Check for collaterals
             #self.data = buf
 
-
-    def wrap_msg(self, msg: bytes):
-        if msg[0] in client_server_msgs:
-            return self.ClientServerDHCP6(msg)
-        elif msg[0] in relay_server_msgs:
-            return self.RelayServerDHCP6(msg)
-        else:
-            logger.error("Unknown message type %d", msg[0])
-            return None
-
-    def unpack(self, buf):
+    data: Union[bytes, ClientServerDHCP6, RelayServerDHCP6] # Important ; Verify!
+    def unpack(self, buf: bytes) -> None:
         dpkt.Packet.unpack(self, buf)
         try:
             if buf[0] in client_server_msgs:
@@ -352,23 +354,10 @@ class Message(dpkt.Packet):
         except (KeyError, dpkt.UnpackError):
             pass
 
-'''
-    def get_payload_type(self):
-        if isinstance(self.data, self.ClientServerDHCP6):
-            logger.debug("Data is of type ClientServerDHCP6")
-            return self.ClientServerDHCP6
-        elif isinstance(self.data, self.RelayServerDHCP6):
-            logger.debug("Data is of type RelayServerDHCP6")
-            return self.RelayServerDHCP6
-        else:
-            logger.error("Unknown message type %d", type(self.data))
-            return type(self.data)
-'''
+def dhcp6_type_to_str(mtype: int) -> str:
+    return client_server_msgs.get(mtype, relay_server_msgs.get(mtype, str(mtype)))
 
-def dhcp6_type_to_str(mtype: int):
-    return client_server_msgs.get(mtype, relay_server_msgs.get(mtype, mtype))
-
-def fetch_dhcp6_opt(dhcp6_msg: (Message.ClientServerDHCP6, Message.RelayServerDHCP6), opt: int) -> Any:
+def fetch_dhcp6_opt(dhcp6_msg: Union[Message.ClientServerDHCP6, Message.RelayServerDHCP6], opt: int) -> Optional[bytes]:
     for t, data in dhcp6_msg.opts:
         if t == opt:
             return data
@@ -377,7 +366,7 @@ def fetch_dhcp6_opt(dhcp6_msg: (Message.ClientServerDHCP6, Message.RelayServerDH
                  opt, dhcp6_type_to_str(mtype))
     return None
 
-def fetch_all_dhcp6_opt(dhcp6_msg: (Message.ClientServerDHCP6, Message.RelayServerDHCP6), opt: int) -> Any:
+def fetch_all_dhcp6_opt(dhcp6_msg: Union[Message.ClientServerDHCP6, Message.RelayServerDHCP6], opt: int) -> Any:
     vals = []
     for t, data in dhcp6_msg.opts:
         if t == opt:
@@ -387,6 +376,4 @@ def fetch_all_dhcp6_opt(dhcp6_msg: (Message.ClientServerDHCP6, Message.RelayServ
         logger.debug("Optcode %d not set in %s message",
                  opt, dhcp6_type_to_str(mtype))
     return vals
-
-
 

@@ -2,7 +2,7 @@
 
 import sqlite3
 from dpkt import dhcp
-from typing import Tuple, List, Any, Dict, Optional
+from typing import Tuple, List, Any, Dict, Optional, Union
 import os
 from ipaddress import IPv4Address
 from enum import Enum
@@ -13,6 +13,11 @@ from ipaddress import IPv6Address, IPv6Network
 from .datatypes import *
 from .logmgr import logger
 from .dhcp6 import *
+
+__all__ = ["schema", "DHCP_IP_OPCODE", "DHCP_NON_DEFAULT_SERVERID_OPCODE", 
+           "DHCP6_NON_DEFAULT_T1", "DHCP6_NON_DEFAULT_T2", 
+           "DHCP6_NON_DEFAULT_PREF_LIFETIME", "DHCP6_NON_DEFAULT_VALID_LIFETIME", 
+           "dtype", "DHCPv4DB", "DHCPv6DB", "exit", "fetch_host_conf_data"]
 
 dhcp_db_conn = None
 
@@ -69,7 +74,7 @@ class dtype(Enum):
     IA = 7
     PD = 8
 
-class DHCPv4DB:
+class DHCPv4DB(object): #Important
     select_command = """ select valid_attributes.opcode, valid_attributes.max_count,
                          valid_attributes.datatype, client_configuration.attr_val
                          from client_configuration
@@ -78,7 +83,7 @@ class DHCPv4DB:
                          where ifname=? and mac=?"""
 
  
-class DHCPv6DB:
+class DHCPv6DB(object): #Important
     select_command = """ select valid_v6attributes.opcode, valid_v6attributes.max_count,
                          valid_v6attributes.datatype, client_v6configuration.attr_val
                          from client_v6configuration
@@ -88,6 +93,8 @@ class DHCPv6DB:
 
 
 def populate_table_from(table_name: str, csv_filename: str) -> None:
+    if dhcp_db_conn is None:
+        return
     cursor = dhcp_db_conn.cursor()
     with open (csv_filename, 'r') as f:
         reader = csv.reader(f)
@@ -142,15 +149,18 @@ def init(config: SectionProxy) -> None:
     if 'additional_v6attributes_file' in config:
         populate_table_from('valid_v6attributes', config.get('additional_v6attributes_file'))
 
-def exit():
+def exit() -> None:
     global dhcp_db_conn
-    dhcp_db_conn.close()
+    if dhcp_db_conn is not None:
+        dhcp_db_conn.close()
     logger.debug("Closed the connection to DHCP database")
 
-def fetch_host_conf_data(db_obj: Union[DHCPv4DB, DHCPv6DB], ifname: str, client_id: Union[Mac, str]) -> Dict[str,Any]:
+def fetch_host_conf_data(db_obj: Union[DHCPv4DB, DHCPv6DB], ifname: str, client_id: Union[Mac, str]) -> Dict[int,Any]:
     logger.debug("Fetching Host conf for intf:%s client ID:%s",ifname, str(client_id))
-    result = {}
+    result:Dict[int, Any] = {}
 
+    if dhcp_db_conn is None:
+        return result
     cursor = dhcp_db_conn.cursor()
     for (opcode, max_count, datatype, value) in cursor.execute(db_obj.select_command, (ifname, str(client_id))):
         try:
