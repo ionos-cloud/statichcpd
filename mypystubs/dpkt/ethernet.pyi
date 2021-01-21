@@ -6,4 +6,3 @@ class Ethernet(dpkt.Packet):
         self.src: bytes
         self.dst: bytes
         self.type: int
-        self.data: bytes

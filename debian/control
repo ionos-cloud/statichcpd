@@ -10,7 +10,8 @@ Build-Depends: debhelper (>= 11),
  python3-all,
  python3-setuptools,
  python3-dpkt,
- python3-pyroute2
+ python3-pyroute2,
+ mypy
 
 Package: statichcpd
 Architecture: any

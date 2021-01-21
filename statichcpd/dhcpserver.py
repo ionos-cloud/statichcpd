@@ -7,7 +7,7 @@ from pyroute2.netlink.rtnl.ifinfmsg import ifinfmsg
 from pyroute2.netlink.rtnl.ifaddrmsg import ifaddrmsg
 import socket
 from logging import Logger
-from typing import Dict, List, Any, Tuple, TypeVar, Optional
+from typing import Dict, List, Any, Tuple, TypeVar, Optional, TYPE_CHECKING
 from ipaddress import AddressValueError, IPv6Address, IPv4Address
 from dpkt import dhcp
 import re
@@ -472,6 +472,9 @@ def start_server() -> None:
                             ifcache.delete(ifcache_entry)
                             continue
                         try:
+                            #if TYPE_CHECKING:
+                            #    eth = dpkt.Packet()
+
                             eth = dpkt.ethernet.Ethernet(msg)
                             isv4 = True
                             if not isinstance(eth.data, dpkt.ip.IP):
@@ -490,7 +493,7 @@ def start_server() -> None:
                             continue
                         if isv4:
                             try:
-                                dh = dpkt.dhcp.DHCP(udp.data)
+                                dh = dpkt.dhcp.DHCP(bytes(udp.data))
                             except (OSError, dpkt.NeedData) as err:
                                 logger.error("Error %s receiving packet on %s. ", err, ifname)
                                 continue
@@ -556,7 +559,7 @@ def start_server() -> None:
                                     logger.error("Unable to process DHCPv6 packet from %s", src_mac)
                                     continue
 
-                                dhcp6_msg = Message(udp.data)
+                                dhcp6_msg = Message(bytes(udp.data))
                                 logger.debug("Received DHCPv6 packet on %s from %s", ifname, src_mac)
 
                                 (pkt, direct_unicast_from_client)= process_dhcp6_packet(ifname, dhcp6_msg, 

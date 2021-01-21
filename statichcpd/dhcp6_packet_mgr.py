@@ -98,7 +98,9 @@ def construct_ia_na_response_data(msg: Message.ClientServerDHCP6,
             configured_addr6_list = cast(List[IPv6Address], conf_data) # To satisfy mypy
         else:
             # Consider only the set of addresses that have the same ID
-            if not all(isinstance(ele, Tuple[str, IPv6Address]) for ele in conf_data):
+            if (not all(isinstance(ele, tuple) for ele in conf_data) or 
+                   not all(isinstance(val, str) for val in [ele[0] for ele in conf_data]) or  #type: ignore
+                   not all(isinstance(val, IPv6Address) for val in [ele[1] for ele in conf_data])) : #type: ignore
                 logger.error("Client: %s : Input Error: Invalid data for client's IA_NA"
                              " when disable_ia_id is not set: %s", client_id, conf_data)
                 return encoded_value
@@ -197,7 +199,9 @@ def construct_ia_ta_response_data(msg: Message.ClientServerDHCP6,
             configured_addr6_list = cast(List[IPv6Address], conf_data) # To satisfy mypy
         else:
             # Consider only the set of addresses that have the same ID
-            if not all(isinstance(ele, Tuple[str, IPv6Address]) for ele in conf_data):
+            if (not all(isinstance(ele, tuple) for ele in conf_data) or 
+                   not all(isinstance(val, str) for val in [ele[0] for ele in conf_data]) or  #type: ignore
+                   not all(isinstance(val, IPv6Address) for val in [ele[1] for ele in conf_data])) : #type: ignore
                 logger.error("Client: %s Input Error: Invalid data for client's IA_TA"
                              " when disable_ia_id is not set: %s", client_id, conf_data)
                 return encoded_value
@@ -289,7 +293,9 @@ def construct_ia_pd_response_data(msg: Message.ClientServerDHCP6,
                 return encoded_value
             configured_pd_list = cast(List[IPv6Network], conf_data) # To satisfy mypy
         else:
-            if not all(isinstance(ele, Tuple[str, IPv6Network]) for ele in conf_data):
+            if not all(isinstance(ele, tuple) for ele in conf_data) or \
+               not all(isinstance(val, str) for val in [ele[0] for ele in conf_data]) or \
+               not all(isinstance(val, IPv6Network) for val in [ele[1] for ele in conf_data]) :
                 logger.error("Client: %s Input Error: Invalid data for client's prefix"
                              " delegation when disable_ia_id is not set: %s", client_id,conf_data)
                 return encoded_value
@@ -589,10 +595,11 @@ def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6,
 
     encoded_ia_na: Optional[bytes] = b''
     encoded_ia_ta: Optional[bytes] = b''
-    if DHCP6_OPT_IA_NA in msg.opts:
+    opts = [ele[0] for ele in msg.opts] #type: List[int]
+    if DHCP6_OPT_IA_NA in opts:
         encoded_ia_na  = construct_ia_na_response_data(msg, host_conf_data.get(DHCP6_OPT_IA_NA, None),
                                                             host_conf_data, ifname, client_id)
-    if DHCP6_OPT_IA_TA in msg.opts:
+    if DHCP6_OPT_IA_TA in opts:
         encoded_ia_ta = construct_ia_ta_response_data(msg, host_conf_data.get(DHCP6_OPT_IA_TA, None), 
                                                            host_conf_data, ifname, client_id)
 

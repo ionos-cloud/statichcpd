@@ -4,7 +4,7 @@ from dpkt.compat import compat_ord
 from enum import Enum
 import struct
 from .logmgr import logger
-from typing import Dict, Any, Tuple, Optional, Union, Iterable, cast
+from typing import Dict, Any, Tuple, Optional, Union, Iterable, cast, TYPE_CHECKING
 
 
 # DHCP6 Options: RFC 3315 Section 22
@@ -211,7 +211,6 @@ class Message(dpkt.Packet):
     class ClientServerDHCP6(dpkt.Packet):
         mtype: int
         xid: bytes
-        data: bytes
 
         '''
 
@@ -250,7 +249,7 @@ class Message(dpkt.Packet):
 
         def unpack(self, buf: bytes) -> None:
             dpkt.Packet.unpack(self, buf)
-            buf = self.data
+            buf = self.data #type: ignore
             
             l = []
             while buf:
@@ -265,14 +264,13 @@ class Message(dpkt.Packet):
                     l.append((t, buf[4:4 + n]))
                     buf = buf[4 + n:]
             self.opts = tuple(l)
-            self.data = buf
+            self.data = buf #type: ignore
 
     class RelayServerDHCP6(dpkt.Packet):
         mtype: int
         hops: int
         la: str
         pa: str
-        data: bytes
         
         '''
 
@@ -323,7 +321,7 @@ class Message(dpkt.Packet):
 
         def unpack(self, buf: bytes) -> None:
             dpkt.Packet.unpack(self, buf)
-            buf = self.data
+            buf = self.data #type: ignore
             
             l = []
             while buf:
@@ -340,7 +338,7 @@ class Message(dpkt.Packet):
             self.opts = tuple(l)
             #self.data = buf
 
-    data: Union[bytes, ClientServerDHCP6, RelayServerDHCP6]
+    #data: Union[bytes, ClientServerDHCP6, RelayServerDHCP6]
     def unpack(self, buf: bytes) -> None:
         dpkt.Packet.unpack(self, buf)
         try:
@@ -349,7 +347,7 @@ class Message(dpkt.Packet):
             elif buf[0] in relay_server_msgs:
                 self.data = self.RelayServerDHCP6(buf)
             else:
-                self.data = buf
+                self.data = buf #type: ignore
             #setattr(self, self.data.__class__.__name__.lower(), self.data)
         except (KeyError, dpkt.UnpackError):
             pass

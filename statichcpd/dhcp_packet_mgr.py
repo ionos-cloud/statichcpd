@@ -97,7 +97,8 @@ def fetch_addr_lease_time(dhcp_obj: dhcp.DHCP, opt_tuple: Tuple[Tuple[int, bytes
     lease_time = default_lease_time
 
     # If a lease time is requested by client, validate and assign accordingly
-    if dhcp.DHCP_OPT_LEASE_SEC in opt_list:
+    opts = [ele[0] for ele in opt_tuple] #type: List[int]
+    if dhcp.DHCP_OPT_LEASE_SEC in opts:
         req_lease_time = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_LEASE_SEC)
         if req_lease_time <= max_lease_time:
             lease_time = req_lease_time
