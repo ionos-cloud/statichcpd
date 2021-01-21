@@ -249,7 +249,8 @@ class Message(dpkt.Packet):
 
         def unpack(self, buf: bytes) -> None:
             dpkt.Packet.unpack(self, buf)
-            buf = self.data #type: ignore
+            if TYPE_CHECKING: assert isinstance(self.data, bytes)
+            buf = self.data
             
             l = []
             while buf:
@@ -264,7 +265,7 @@ class Message(dpkt.Packet):
                     l.append((t, buf[4:4 + n]))
                     buf = buf[4 + n:]
             self.opts = tuple(l)
-            self.data = buf #type: ignore
+            self.data = buf
 
     class RelayServerDHCP6(dpkt.Packet):
         mtype: int
@@ -321,7 +322,8 @@ class Message(dpkt.Packet):
 
         def unpack(self, buf: bytes) -> None:
             dpkt.Packet.unpack(self, buf)
-            buf = self.data #type: ignore
+            if TYPE_CHECKING: assert isinstance(self.data, bytes)
+            buf = self.data
             
             l = []
             while buf:
@@ -341,13 +343,14 @@ class Message(dpkt.Packet):
     #data: Union[bytes, ClientServerDHCP6, RelayServerDHCP6]
     def unpack(self, buf: bytes) -> None:
         dpkt.Packet.unpack(self, buf)
+        if TYPE_CHECKING: assert isinstance(self.data, bytes)
         try:
             if buf[0] in client_server_msgs:
                 self.data = self.ClientServerDHCP6(buf)
             elif buf[0] in relay_server_msgs:
                 self.data = self.RelayServerDHCP6(buf)
             else:
-                self.data = buf #type: ignore
+                self.data = buf
             #setattr(self, self.data.__class__.__name__.lower(), self.data)
         except (KeyError, dpkt.UnpackError):
             pass

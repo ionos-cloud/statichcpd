@@ -7,7 +7,9 @@ from . import udp
 
 class Packet():
     def __init__(self, *args: bytes, **kwargs: Any) -> None:
-        self.data: Packet
+        # Ideally self.data is of type Union[bytes, <any subclass of Packet>]
+        # But for current usecase, this works!
+        self.data: Union[bytes, Packet]
         self.__hdr_len__: int
         self.src: bytes # Ideally not part of Packet. Only to access ip.data where ip=eth.data
 

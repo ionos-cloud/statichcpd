@@ -7,7 +7,7 @@ from pyroute2.netlink.rtnl.ifinfmsg import ifinfmsg
 from pyroute2.netlink.rtnl.ifaddrmsg import ifaddrmsg
 import socket
 from logging import Logger
-from typing import Dict, List, Any, Tuple, TypeVar, Optional, TYPE_CHECKING
+from typing import Dict, List, Any, Tuple, TypeVar, Optional
 from ipaddress import AddressValueError, IPv6Address, IPv4Address
 from dpkt import dhcp
 import re
@@ -472,9 +472,6 @@ def start_server() -> None:
                             ifcache.delete(ifcache_entry)
                             continue
                         try:
-                            #if TYPE_CHECKING:
-                            #    eth = dpkt.Packet()
-
                             eth = dpkt.ethernet.Ethernet(msg)
                             isv4 = True
                             if not isinstance(eth.data, dpkt.ip.IP):
