@@ -16,8 +16,9 @@ from socket import htons
 import dpkt
 from ctypes import create_string_buffer, addressof
 from struct import pack
-import psutil
+import fcntl
 import time
+import struct
 
 from .dhcp_packet_mgr import process_dhcp_packet
 from .dhcp6_packet_mgr import process_dhcp6_packet
@@ -41,12 +42,16 @@ def init(config: SectionProxy) -> None:
     dhcp_ratelimit = config.getint('dhcp_ratelimit', fallback=1000)
 
 def get_mac_address(ifname: str) -> Optional[Mac]:
-    nics = psutil.net_if_addrs()
-    if ifname in nics:
-        nic = nics[ifname]
-        for i in nic:
-            if i.family == psutil.AF_LINK:
-                return Mac(i.address)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        info = fcntl.ioctl(s.fileno(), 0x8927,  struct.pack('256s', bytes(ifname, 'utf-8')[:15]))
+        if info:
+            s.close()
+            return Mac(':'.join('%02x' % b for b in info[18:24]))
+    except OSError as err:
+        logger.error("Error %s fetching hardware address of  %s.", err, ifname)
+    if s is not None:
+        s.close()
     return None
 
 class RateLimiter():
