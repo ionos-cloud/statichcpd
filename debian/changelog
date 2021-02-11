@@ -1,3 +1,70 @@
+statichcpd (2.01) all-stretch; urgency=medium
+
+  [ Reshma Sreekumar ]
+  * DHCPv6 initial code changes
+  * DHCPv6 solicit message parsing
+  * IA_NA construction
+  * IA_TA construction
+  * Minor fixes
+  * Handlee Request msgs and Construct Reply
+  * Changes to optionally use mac as duid and disable IAID
+  * Changes to handle confirm, renew and rebind msgs
+  * Code for prefix delegation
+  * Minor fixes
+  * Added new tables to existing database
+  * Minor fixes
+  * Support for relayserver packets
+  * Updated version log to 2.0
+  * Removed dhcp6_database_manager module
+  * Updated server ID and IA Addr lifetimes
+  * Support for configurable IA lifetimes
+  * Global default lifetimes and interface cache cleanup
+  * Invalidate access using fd when cache entry is deactivated
+  * Resolved foreign key mismatch error for client_v6configuration
+  * Introduced ratelimiting and global udp socket for DHCPv6 replies
+  * Minor fix
+  * Improvised the ratelimiting method
+  * Minor fixes
+  * Handle dhcpv6 information request msgs
+  * Modified debug logs
+  * Updated server's socket filter
+  * Initial commit to unittest framework for DHCPv4
+  * Removed unwanted psutil import
+  * Fixed build issues
+  * Cosmetic fix
+  * Added DHCPv6 to basic testing
+  * Fix to SDN-875
+
+  [ Eugene Crosser ]
+  * add .gitignore
+  * TEMPORARY workarond for "TypeError"
+  * Probable fix for SDN-877
+
+  [ Reshma Sreekumar ]
+  * Added additional behavioral information
+
+  [ Eugene Crosser ]
+  * Documentation changes
+
+  [ Reshma Sreekumar ]
+  * Updated README.md
+
+  [ Eugene Crosser ]
+  * Additions to the documentation & more TODO
+
+  [ Reshma Sreekumar ]
+  * Included non-option key values
+  * Updated setup file to reflect README file name change
+  * Initial commit for static typecheck
+  * Updated debian rules for mypystubs
+  * Cleanup of comments
+  * Updated python version requirement for variable type annotation
+  * Removed unnecessary dependency on psutil
+  * Handle mypy errors on mypy 0.782
+  * Minor changes to satisfy mypy
+
+ -- Reshma Sreekumar <reshma.sreekumar@cloud.ionos.com>  Thu, 11 Feb 2021 11:57:19 +0100
+
 statichcpd (2.0) all-stretch; urgency=medium
 
   * Added support to handle DHCPINFORM
