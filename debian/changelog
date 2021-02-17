@@ -1,3 +1,13 @@
+statichcpd (2.02) all-stretch; urgency=medium
+
+  [ Eugene Crosser ]
+  * debian: make sysunit create namespace
+
+  [ Reshma Sreekumar ]
+  * Remove 'PrivateTmp' from execution parameters
+
+ -- Reshma Sreekumar <reshma.sreekumar@cloud.ionos.com>  Wed, 17 Feb 2021 17:28:30 +0100
+
 statichcpd (2.01) all-stretch; urgency=medium
 
   [ Reshma Sreekumar ]
