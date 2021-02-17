@@ -5,7 +5,6 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=-/etc/default/statichcpd
-PrivateTmp=yes
 
 ExecStart=sh -c "test x$NAMESPACE = x \
         && /usr/bin/python3 -m statichcpd $OPTIONS \
