@@ -1,11 +1,11 @@
 # Statichcpd - DHCP server for virtual hosting
 
-Statichcpd is an implementation of DHCP and DHCP6 protocols targeted at
-virtual hosting enviroments. It supports clients in multiple virtual
-Layer 2 networks, and assumes that these networks are represented
-by different interfaces. It only supports _static_ allocations
-of IP addresses (and options) per MAC address of the client inside
-a network. I.e. there is no support of address pools, and "unknown"
+Statichcpd(Static Host Configuration Protocol Daemon) is an implementation
+of DHCP and DHCP6 protocols targeted at virtual hosting enviroments.
+It supports clients in multiple virtual Layer 2 networks, and assumes that
+these networks are represented by different interfaces. It only supports
+_static_ allocations of IP addresses (and options) per MAC address of the
+client inside a network.I.e. there is no support of address pools, and "unknown"
 clients won't be offered an address. On the other side, clients in
 different virtual networks may have the same MAC address, and will be
 treated as different clients. Because of its reliance on netlink
