@@ -96,6 +96,21 @@ both clients on the same interface irrespective of which of the client's
 interfaces the default route is pinned to. Thus, this is the recommended
 configuration.
 
+### Hosts with addresses within the same subnet on NICs in same network.
+
+If a host is configured with NICs in same network and having addresses in
+the same subnet, the unicast renewal requests from the client may not
+function correctly in certain circumstances. When a client attempts to
+renew its address through unicast renewal requests, it's expected that the
+client is able to respond to ARP requests. The DHCP reply from the server
+triggers an ARP request/refresh before the reply is unicasted.
+
+However, having multiple addresses in the same subnet can possibly result
+in ARP Flux.i.e. any one of the NICs may be chosen to respond to ARP requests.
+This can result in DHCP unicast replies being delivered to the wrong NIC.
+As a result, the affected NIC always has to fallback to DORA after multiple
+renewal failures.
+
 ### Changing DHCP configuration of a "live" client
 
 It is possible to change a client's configured set of attributes, including its
