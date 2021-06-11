@@ -39,10 +39,8 @@ def fetch_dhcp_opt(dhcp_obj: dhcp.DHCP, opt: int) -> Any:
     for t, data in dhcp_obj.opts:
         if t == opt:
             return data
-    opcode = fetch_dhcp_type(dhcp_obj)
-    logger.debug("Optcode %d not set in %s from %s",
-                 opt, dhcp_type_to_str.get(opcode, opcode),
-                 str(Mac(dhcp_obj.chaddr)))
+    logger.debug("Optcode %d not set in DHCP packet from %s",
+                 opt, str(Mac(dhcp_obj.chaddr)))
     return None
 
 def fetch_dhcp_type(dhcp_obj: dhcp.DHCP) -> int:
