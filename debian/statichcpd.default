@@ -1,2 +1,2 @@
-#OPTIONS="-v"
-NAMESPACE="dhcp-ns"
+OPTIONS="-a /etc/statichcpd/"
+NAMESPACE='dhcp-ns'

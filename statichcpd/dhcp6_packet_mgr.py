@@ -26,15 +26,15 @@ default_t2 = 0
 default_pref_lifetime = 0
 default_valid_lifetime = 0
 
-def init(config: SectionProxy) -> None:
+def init(config: Dict[str, Any]) -> None:
     global use_mac_as_duid, disable_ia_id
     global default_t1, default_t2, default_pref_lifetime, default_valid_lifetime
-    use_mac_as_duid = config.getboolean('use_mac_as_client_duid', fallback=False)
-    disable_ia_id = config.getboolean('disable_ia_id', fallback=False)
-    default_t1 = config.getint('default_renew_time', fallback=1000)
-    default_t2 = config.getint('default_rebind_time', fallback=2000)
-    default_pref_lifetime = config.getint('default_pref_lifetime', fallback=3000)
-    default_valid_lifetime = config.getint('default_valid_lifetime', fallback=4000)
+    use_mac_as_duid = bool(config.get('use_mac_as_client_duid', False))
+    disable_ia_id = bool(config.get('disable_ia_id', False))
+    default_t1 = int(config.get('default_renew_time', 1000))
+    default_t2 = int(config.get('default_rebind_time', 2000))
+    default_pref_lifetime = int(config.get('default_pref_lifetime', 3000))
+    default_valid_lifetime = int(config.get('default_valid_lifetime', 4000))
  
 # Message Validation: RFC 3315 Section 15
 
@@ -514,7 +514,8 @@ def fetch_client_duid(client_duid: Optional[bytes]) -> str:
     return client_id
 
 def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6, 
-                        server_duid: bytes, src_mac: Mac) -> Optional[bytes]:
+                        server_duid: bytes, src_mac: Mac) -> Tuple[Optional[bytes], Optional[str]]:
+    err_return_val: Tuple[None, None] = (None, None)
     rapid_commit = fetch_dhcp6_opt(msg, DHCP6_OPT_RAPID_COMMIT)
     request_list_bytestr = fetch_dhcp6_opt(msg, DHCP6_OPT_ORO)
     request_list_opts = list(struct.unpack('>%iH'%(len(request_list_bytestr)/2), request_list_bytestr)) \
@@ -529,10 +530,10 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6,
     logger.debug("%s used as client ID for database lookup for packet on %s", client_id, ifname)
 
     
-    host_conf_data = fetch_host_conf_data(DHCPv6DB(), ifname, client_id)
+    host_conf_data, server_iface = fetch_host_conf_data(DHCPv6DB(), ifname, client_id)
     if not host_conf_data:
         logger.debug("Client: %s Ifname: %s No configuration data found for the host. Skipping ..", client_id, ifname)
-        return None
+        return err_return_val
 
     if rapid_commit:
         dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid, client_id)
@@ -543,12 +544,13 @@ def process_solicit_msg(ifname: str, msg: Message.ClientServerDHCP6,
         logger.debug("Client:%s Ifname:%s No response DHCP6 Advertise packet for %s ",
                       dhcp6_type_to_str(msg.mtype),
                       client_id, ifname)
-        return None
+        return err_return_val
     data = bytes(dhcp_response)
-    return data
+    return (data, server_iface)
 
 def process_request_renew_rebind_info_msg(ifname: str, msg: Message.ClientServerDHCP6, 
-                                     server_duid: bytes, src_mac: Mac) -> Optional[bytes]:
+                                     server_duid: bytes, src_mac: Mac) -> Tuple[Optional[bytes], Optional[str]]:
+    err_return_val: Tuple[None, None] = (None, None)
     client_duid = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
     # TODO: If it's unicast and unicast is not supported for this client,
     #       send back Status code UseMulticast
@@ -562,22 +564,23 @@ def process_request_renew_rebind_info_msg(ifname: str, msg: Message.ClientServer
     else:
         client_id = fetch_client_duid(client_duid)
     
-    host_conf_data = fetch_host_conf_data(DHCPv6DB(), ifname, client_id)
+    host_conf_data, server_iface = fetch_host_conf_data(DHCPv6DB(), ifname, client_id)
     if not host_conf_data:
         logger.debug("Client:%s Ifname:%s No configuration data found for the host. Skipping ..", client_id, ifname)
-        return None
+        return err_return_val
 
     dhcp_response = construct_dhcp_reply(ifname, msg, request_list_opts, host_conf_data, server_duid, client_id)
 
     if not dhcp_response:
         logger.debug("Client:%s Ifname:%s No DHCP6 Reply packet for %s ",
                       client_id, ifname, msg.mtype,)
-        return None
+        return err_return_val
     data = bytes(dhcp_response)
-    return data
+    return data, server_iface
 
 def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6,
-                        server_duid: bytes, src_mac: Mac) -> Optional[bytes]:
+                        server_duid: bytes, src_mac: Mac) -> Tuple[Optional[bytes], Optional[str]]:
+    err_return_val: Tuple[None, None] = (None, None)
     client_duid = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
     # TODO: If it's unicast and unicast is not supported for this client,
     #       send back Status code UseMulticast
@@ -588,10 +591,10 @@ def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6,
     else:
         client_id = fetch_client_duid(client_duid)
     
-    host_conf_data = fetch_host_conf_data(DHCPv6DB(), ifname, client_id)
+    host_conf_data, server_iface = fetch_host_conf_data(DHCPv6DB(), ifname, client_id)
     if not host_conf_data:
         logger.debug("Client:%s Ifname:%s No configuration data found for the host. Skipping ..", client_id, ifname)
-        return None
+        return err_return_val
 
     encoded_ia_na: Optional[bytes] = b''
     encoded_ia_ta: Optional[bytes] = b''
@@ -616,12 +619,13 @@ def process_confirm_msg(ifname: str, msg: Message.ClientServerDHCP6,
     if not dhcp_response:
         logger.debug("Client:%s Ifname:%s No response DHCP6 Reply packet for %s",
                       client_id, ifname, msg.mtype)
-        return None
+        return err_return_val
     data = bytes(dhcp_response)
-    return data
+    return data, server_iface
 
 def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6, 
-                              server_duid: bytes, src_mac: Mac) -> Optional[bytes]:
+                              server_duid: bytes, src_mac: Mac) -> Tuple[Optional[bytes], Optional[str]]:
+    err_return_val: Tuple[None, None] = (None, None)
     valid_msg = validate_msg(msg, server_duid)
     if not valid_msg:
         logger.error("%s message validation failed on interface %s from source mac %s.", 
@@ -631,7 +635,7 @@ def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6,
         # Identifier option, a Client Identifier option if one was included in
         # the message and a Status Code option with status UnSpecFail.
 
-        return None
+        return err_return_val
 
     logger.debug("Ifname:%s SrcMac: %s Received a client server message of type %s",
                 ifname, src_mac,
@@ -644,21 +648,22 @@ def process_client_server_msg(ifname: str, msg: Message.ClientServerDHCP6,
         return process_request_renew_rebind_info_msg(ifname, msg, server_duid, src_mac)
     if msg.mtype is CONFIRM:
         return process_confirm_msg(ifname, msg, server_duid, src_mac)
-    return None
+    return err_return_val
 
 def process_relayforw_msg(ifname: str, payload: Message.RelayServerDHCP6, 
-                          server_duid: bytes, src_mac: Mac) -> Optional[bytes]:
+                          server_duid: bytes, src_mac: Mac) -> Tuple[Optional[bytes], Optional[str]]:
+    err_return_val: Tuple[None, None] = (None, None)
     dhcp_msg = fetch_dhcp6_opt(payload, DHCP6_OPT_RELAY_MSG)
     if dhcp_msg is None:
         logger.debug("Empty DHCP Message in DHCP Relay Forward msg from %s on intf %s",
                                                        src_mac, ifname)
-        return None
-    reply_msg = process_client_server_msg(ifname, Message.ClientServerDHCP6(dhcp_msg),
+        return err_return_val
+    reply_msg, server_iface = process_client_server_msg(ifname, Message.ClientServerDHCP6(dhcp_msg),
                                                                   server_duid, src_mac)
     if reply_msg is None:
         logger.debug("Empty DHCP Message in DHCP Relay Reply to %s on intf %s",
                                                        src_mac, ifname)
-        return None
+        return err_return_val
     relay_reply = Message.RelayServerDHCP6(
                                          mtype=RELAYREPL,
                                          hops=payload.hops,
@@ -666,34 +671,36 @@ def process_relayforw_msg(ifname: str, payload: Message.RelayServerDHCP6,
                                          pa=payload.pa,
                                          opts=[(DHCP6_OPT_RELAY_MSG, reply_msg)]
                                         )
-    return bytes(relay_reply)
+    return bytes(relay_reply), server_iface
 
 
 
 def process_relay_server_msg(ifname: str, payload: Message.RelayServerDHCP6, 
-                             server_duid: bytes, src_mac: Mac) -> Optional[bytes]:
+                             server_duid: bytes, src_mac: Mac) -> Tuple[Optional[bytes], Optional[str]]:
+    err_return_val: Tuple[None, None] = (None, None)
     logger.debug("Received a relay server message of type %s from %s", 
                   dhcp6_type_to_str(payload.mtype), src_mac)
     if payload.mtype is not RELAYFORW:
-        return None
+        return err_return_val
     if use_mac_as_duid:
         logger.error("Server configured to use source mac as client DUID. Unable to handle %s from relay agent(%s).",
                       dhcp6_type_to_str(payload.mtype), src_mac)
-        return None
+        return err_return_val
     return process_relayforw_msg(ifname, payload, server_duid, src_mac)
 
-def process_dhcp6_packet(ifname: str, dhcp6_msg: Message, server_mac: Mac, src_mac: Mac) -> Tuple[Optional[bytes], bool]:
+def process_dhcp6_packet(ifname: str, dhcp6_msg: Message,
+                         server_mac: Mac, src_mac: Mac) -> Tuple[Optional[bytes], bool, Optional[str]]:
     payload = dhcp6_msg.data
     server_duid = struct.pack(">HH", 3, 1) + binascii.unhexlify((str(server_mac)).replace(":",""))
     direct_unicast_from_client = False
     pkt : Optional[bytes]
     if isinstance(payload, Message.ClientServerDHCP6):
-        pkt = process_client_server_msg(ifname, payload, server_duid, src_mac)
+        pkt, server_iface = process_client_server_msg(ifname, payload, server_duid, src_mac)
         direct_unicast_from_client = True
     elif isinstance(payload, Message.RelayServerDHCP6):
-        pkt = process_relay_server_msg(ifname, payload, server_duid, src_mac)
+        pkt, server_iface = process_relay_server_msg(ifname, payload, server_duid, src_mac)
     else:
         logger.error("Malformed packet with unknown DHCP msg type %d received", type(payload))
         pkt = None
 
-    return (pkt, direct_unicast_from_client)
+    return (pkt, direct_unicast_from_client, server_iface)

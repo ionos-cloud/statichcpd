@@ -1,4 +1,4 @@
-statichcpd (2.03) all-stretch; urgency=medium
+statichcpd (3.0) all-stretch; urgency=medium
 
   * Updated README
   * Updated README: New edge case behavior

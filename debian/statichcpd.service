@@ -6,10 +6,11 @@ After=network.target
 Type=simple
 EnvironmentFile=-/etc/default/statichcpd
 
-ExecStart=sh -c "test x$NAMESPACE = x \
-        && /usr/bin/python3 -m statichcpd $OPTIONS \
-        || (ip netns add $NAMESPACE ; \
-            ip netns exec $NAMESPACE /usr/bin/python3 -m statichcpd $OPTIONS)"
+ExecStartPre=sh -c "test x$NAMESPACE = x && true \
+        || systemctl start statichcpd@$NAMESPACE.service"
+ExecStopPost=sh -c "test x$NAMESPACE = x && true \
+        || systemctl stop statichcpd@$NAMESPACE.service"
+ExecStart=/usr/bin/python3 -m statichcpd $OPTIONS
 KillSignal=INT
 PIDFile=/run/statichcpd.pid
 
