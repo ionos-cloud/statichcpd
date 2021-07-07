@@ -43,20 +43,44 @@ schema = [
            constraint compkey_mac_if unique(ifname, mac));""",
         """create table if not exists client_configuration (
            ifname text not null,
+           groupID text not null,
            mac text not null,
            attr_code int not null,
            attr_val not null,
-           constraint compkey_mac_if_attr unique(ifname, mac, attr_code, attr_val)
+           constraint compkey_mac_if_attr unique(ifname, groupID, mac, attr_code, attr_val)
            foreign key (ifname, mac) references clients(ifname, mac) on delete cascade,
            foreign key (attr_code) references valid_attributes(opcode) on delete restrict);""",
         """create table if not exists client_v6configuration (
            ifname text not null,
+           groupID text not null,
            duid text not null,
            attr_code int not null,
            attr_val not null,
-           constraint compkey_clientid_if_attr unique(ifname, duid, attr_code, attr_val)
+           constraint compkey_clientid_if_attr unique(ifname, groupID, duid, attr_code, attr_val)
            foreign key (ifname, duid) references clients(ifname, mac) on delete cascade,
-           foreign key (attr_code) references valid_v6attributes(opcode) on delete restrict);"""
+           foreign key (attr_code) references valid_v6attributes(opcode) on delete restrict);""",
+        """create trigger if not exists client_insertion_v4 after insert on client_configuration begin
+           insert or ignore into clients values (new.ifname, new.mac);
+           insert or ignore into client_groups values (new.ifname, new.groupID);
+           end;""",
+        """create trigger if not exists client_insertion_v6 after insert on client_v6configuration begin
+           insert or ignore into clients values (new.ifname, new.duid);
+           insert or ignore into client_groups values (new.ifname, new.groupID);
+           end;""",
+        """create trigger if not exists client_deletion_v4 after delete on client_configuration
+           when (select count(*) from client_configuration where ifname=old.ifname and mac=old.mac) == 0
+           and (select count(*) from client_v6configuration where ifname=old.ifname and duid=old.mac) == 0
+           begin
+           delete from clients where ifname=old.ifname and mac=old.mac;
+           delete from client_groups where ifname=old.ifname and groupID=old.groupID;
+           end;""",
+        """create trigger if not exists client_deletion_v6 after delete on client_v6configuration
+           when (select count(*) from client_v6configuration where ifname=old.ifname and duid=old.mac) == 0
+           and (select count(*) from client_configuration where ifname=old.ifname and mac=old.mac) == 0
+           begin
+           delete from clients where ifname=old.ifname and mac=old.mac;
+           delete from client_groups where ifname=old.ifname and groupID=old.groupID;
+           end;""",
         ]
 
 # Using IP(v4/v6) opcode value outside permitted
