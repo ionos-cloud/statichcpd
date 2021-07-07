@@ -32,9 +32,14 @@ schema = [
            max_count int not null,
            datatype int not null,
            constraint unique_opcode unique(opcode));""",
+        """create table if not exists client_groups (
+           ifname text not null,
+           groupID text not null,
+           constraint compkey_if unique(ifname));""",
         """create table if not exists clients (
            ifname text not null,
            mac text not null,
+           foreign key (ifname) references client_groups(ifname) on delete cascade,
            constraint compkey_mac_if unique(ifname, mac));""",
         """create table if not exists client_configuration (
            ifname text not null,
@@ -76,20 +81,24 @@ class dtype(Enum):
 
 class DHCPv4DB(object):
     select_command = """ select valid_attributes.opcode, valid_attributes.max_count,
-                         valid_attributes.datatype, client_configuration.attr_val
+                         valid_attributes.datatype, client_configuration.attr_val,
+                         client_configuration.ifname
                          from client_configuration
                          join valid_attributes on
                          client_configuration.attr_code = valid_attributes.opcode
-                         where ifname=? and mac=?"""
+                         where mac=? and ifname in (select client_groups.ifname from client_groups
+                         where client_groups.groupID=(select groupID from client_groups where client_groups.ifname=?))"""
 
  
 class DHCPv6DB(object):
     select_command = """ select valid_v6attributes.opcode, valid_v6attributes.max_count,
-                         valid_v6attributes.datatype, client_v6configuration.attr_val
+                         valid_v6attributes.datatype, client_v6configuration.attr_val,
+                         client_v6configuration.ifname
                          from client_v6configuration
                          join valid_v6attributes on
                          client_v6configuration.attr_code = valid_v6attributes.opcode
-                         where ifname=? and duid=?"""
+                         where and duid=? and ifname in (select client_groups.ifname from client_groups
+                         where client_groups.groupID = (select groupID from client_groups where client_groups.ifname=?))"""
 
 
 def populate_table_from(table_name: str, csv_filename: str) -> None:
@@ -155,14 +164,21 @@ def exit() -> None:
         dhcp_db_conn.close()
     logger.debug("Closed the connection to DHCP database")
 
-def fetch_host_conf_data(db_obj: Union[DHCPv4DB, DHCPv6DB], ifname: str, client_id: Union[Mac, str]) -> Dict[int,Any]:
+def fetch_host_conf_data(db_obj: Union[DHCPv4DB, DHCPv6DB], ifname: str,
+                         client_id: Union[Mac, str]) -> Tuple[Dict[int,Any], Optional[str]]:
     logger.debug("Fetching Host conf for intf:%s client ID:%s",ifname, str(client_id))
     result:Dict[int, Any] = {}
 
     if dhcp_db_conn is None:
-        return result
+        return result, None
     cursor = dhcp_db_conn.cursor()
-    for (opcode, max_count, datatype, value) in cursor.execute(db_obj.select_command, (ifname, str(client_id))):
+    client_if = None
+    for (opcode, max_count, datatype, value, iface) in cursor.execute(db_obj.select_command, (ifname, str(client_id))):
+        if client_if and client_if != iface:
+            logger.error("Multiple server interfaces %s match the client ID %s",
+                          [client_if, iface], client_id)
+            return result, None
+        client_if = iface
         try:
             datatype = dtype(datatype)
         except ValueError as err:
@@ -214,5 +230,5 @@ def fetch_host_conf_data(db_obj: Union[DHCPv4DB, DHCPv6DB], ifname: str, client_
                              "for client (%s, %s)",
                              datatype, max_count, ifname, client_id)
     cursor.close()
-    return result
+    return result, iface
 
