@@ -33,9 +33,8 @@ schema = [
            datatype int not null,
            constraint unique_opcode unique(opcode));""",
         """create table if not exists client_groups (
-           ifname text not null,
-           groupID text not null,
-           constraint compkey_if unique(ifname));""",
+           ifname text not null primary key,
+           groupID text);""",
         """create table if not exists clients (
            ifname text not null,
            mac text not null,
@@ -43,7 +42,7 @@ schema = [
            constraint compkey_mac_if unique(ifname, mac));""",
         """create table if not exists client_configuration (
            ifname text not null,
-           groupID text not null,
+           groupID text,
            mac text not null,
            attr_code int not null,
            attr_val not null,
@@ -52,24 +51,40 @@ schema = [
            foreign key (attr_code) references valid_attributes(opcode) on delete restrict);""",
         """create table if not exists client_v6configuration (
            ifname text not null,
-           groupID text not null,
+           groupID text,
            duid text not null,
            attr_code int not null,
            attr_val not null,
            constraint compkey_clientid_if_attr unique(ifname, groupID, duid, attr_code, attr_val)
            foreign key (ifname, duid) references clients(ifname, mac) on delete cascade,
            foreign key (attr_code) references valid_v6attributes(opcode) on delete restrict);""",
-        """create trigger if not exists client_insertion_v4 after insert on client_configuration begin
-           insert into clients select new.ifname, new.mac where not exists(
+        """create trigger if not exists client_insertion_v4 before insert on client_configuration
+           when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) == 0
+           begin
+           insert into clients (ifname, mac) select new.ifname, new.mac where not exists(
            select 1 from clients where ifname=new.ifname and mac=new.mac);
-           insert into client_groups select new.ifname, new.groupID where not exists(
+           insert into client_groups (ifname, groupID) select new.ifname, new.groupID where not exists(
            select 1 from client_groups where ifname=new.ifname and groupID=new.groupID);
            end;""",
-        """create trigger if not exists client_insertion_v6 after insert on client_v6configuration begin
-           insert into clients select new.ifname, new.duid where not exists(
+        """create trigger if not exists client_replace_v4 before insert on client_configuration
+           when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) > 0
+           begin
+           replace into clients (ifname, mac) values (new.ifname, new.mac);
+           replace into client_groups (ifname, groupID) values (new.ifname, new.groupID);
+           end;""",
+        """create trigger if not exists client_insertion_v6 before insert on client_v6configuration
+           when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) == 0
+           begin
+           insert into clients (ifname, groupID) select new.ifname, new.duid where not exists(
            select 1 from clients where ifname=new.ifname and mac=new.duid);
-           insert into client_groups select new.ifname, new.groupID where not exists(
+           insert into client_groups (ifname, groupID) select new.ifname, new.groupID where not exists(
            select 1 from client_groups where ifname=new.ifname and groupID=new.groupID);
+           end;""",
+        """create trigger if not exists client_replace_v6 before insert on client_v6configuration
+           when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) > 0
+           begin
+           replace into clients (ifname, mac) values (new.ifname, new.duid);
+           replace into client_groups (ifname, groupID) values (new.ifname, new.groupID);
            end;""",
         """create trigger if not exists client_deletion_v4 after delete on client_configuration
            when (select count(*) from client_configuration where ifname=old.ifname and mac=old.mac) == 0
@@ -128,6 +143,14 @@ class DHCPv6DB(object):
                          where duid=? and ifname in (select client_groups.ifname from client_groups
                          where client_groups.groupID = (select groupID from client_groups where client_groups.ifname=?))"""
 
+migrate_cfgs_cmd = ["""insert into clients select ifname, mac from client_configuration where not exists(
+                       select 1 from clients where ifname=ifname and mac=mac);""",
+                    """insert into client_groups select ifname, groupID from client_configuration where not exists(
+                       select 1 from client_groups where ifname=ifname and groupID=groupID);""",
+                    """insert into clients select ifname, duid from client_v6configuration where not exists(
+                       select 1 from clients where ifname=ifname and mac=duid);""",
+                    """insert into client_groups select ifname, groupID from client_v6configuration where not exists(
+                       select 1 from client_groups where ifname=ifname and groupID=groupID);"""]
 
 def populate_table_from(table_name: str, csv_filename: str) -> None:
     if dhcp_db_conn is None:
@@ -160,6 +183,9 @@ def init(config: SectionProxy) -> None:
 
     cursor = dhcp_db_conn.cursor()
     for command in schema:
+        cursor.execute(command)
+    # Migrate configs from a non-empty database
+    for command in migrate_cfgs_cmd:
         cursor.execute(command)
     cursor.execute('delete from valid_attributes')
     dhcp_db_conn.commit()
