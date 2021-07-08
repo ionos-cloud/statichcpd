@@ -75,10 +75,10 @@ schema = [
            delete from client_groups where ifname=old.ifname and groupID=old.groupID;
            end;""",
         """create trigger if not exists client_deletion_v6 after delete on client_v6configuration
-           when (select count(*) from client_v6configuration where ifname=old.ifname and duid=old.mac) == 0
-           and (select count(*) from client_configuration where ifname=old.ifname and mac=old.mac) == 0
+           when (select count(*) from client_v6configuration where ifname=old.ifname and duid=old.duid) == 0
+           and (select count(*) from client_configuration where ifname=old.ifname and mac=old.duid) == 0
            begin
-           delete from clients where ifname=old.ifname and mac=old.mac;
+           delete from clients where ifname=old.ifname and mac=old.duid;
            delete from client_groups where ifname=old.ifname and groupID=old.groupID;
            end;""",
         ]
