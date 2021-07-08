@@ -60,12 +60,12 @@ schema = [
            foreign key (ifname, duid) references clients(ifname, mac) on delete cascade,
            foreign key (attr_code) references valid_v6attributes(opcode) on delete restrict);""",
         """create trigger if not exists client_insertion_v4 after insert on client_configuration begin
-           insert or ignore into clients values (new.ifname, new.mac);
-           insert or ignore into client_groups values (new.ifname, new.groupID);
+           insert into clients values (new.ifname, new.mac);
+           insert into client_groups values (new.ifname, new.groupID);
            end;""",
         """create trigger if not exists client_insertion_v6 after insert on client_v6configuration begin
-           insert or ignore into clients values (new.ifname, new.duid);
-           insert or ignore into client_groups values (new.ifname, new.groupID);
+           insert into clients values (new.ifname, new.duid);
+           insert into client_groups values (new.ifname, new.groupID);
            end;""",
         """create trigger if not exists client_deletion_v4 after delete on client_configuration
            when (select count(*) from client_configuration where ifname=old.ifname and mac=old.mac) == 0
