@@ -121,7 +121,7 @@ class DHCPv6DB(object):
                          from client_v6configuration
                          join valid_v6attributes on
                          client_v6configuration.attr_code = valid_v6attributes.opcode
-                         where and duid=? and ifname in (select client_groups.ifname from client_groups
+                         where duid=? and ifname in (select client_groups.ifname from client_groups
                          where client_groups.groupID = (select groupID from client_groups where client_groups.ifname=?))"""
 
 
@@ -197,7 +197,7 @@ def fetch_host_conf_data(db_obj: Union[DHCPv4DB, DHCPv6DB], ifname: str,
         return result, None
     cursor = dhcp_db_conn.cursor()
     client_if = None
-    for (opcode, max_count, datatype, value, iface) in cursor.execute(db_obj.select_command, (ifname, str(client_id))):
+    for (opcode, max_count, datatype, value, iface) in cursor.execute(db_obj.select_command, (str(client_id), ifname)):
         if client_if and client_if != iface:
             logger.error("Multiple server interfaces %s match the client ID %s",
                           [client_if, iface], client_id)
@@ -254,5 +254,5 @@ def fetch_host_conf_data(db_obj: Union[DHCPv4DB, DHCPv6DB], ifname: str,
                              "for client (%s, %s)",
                              datatype, max_count, ifname, client_id)
     cursor.close()
-    return result, iface
+    return result, client_if
 
