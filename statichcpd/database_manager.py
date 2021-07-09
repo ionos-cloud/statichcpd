@@ -54,7 +54,8 @@ schema = [
            constraint unique_opcode unique(opcode));""",
         """create table if not exists client_groups (
            ifname text not null primary key,
-           groupID text);""",
+           groupID text,
+           constraint compkey_if_grp unique(ifname, groupID));""",
         """create table if not exists clients (
            ifname text not null,
            mac text not null,
@@ -68,6 +69,7 @@ schema = [
            attr_val not null,
            constraint compkey_mac_if_attr unique(ifname, groupID, mac, attr_code, attr_val)
            foreign key (ifname, mac) references clients(ifname, mac) on delete cascade,
+           foreign key (ifname, groupID) references client_groups(ifname, groupID) on delete cascade,
            foreign key (attr_code) references valid_attributes(opcode) on delete restrict);""",
         """create table if not exists client_v6configuration (
            ifname text not null,
@@ -77,6 +79,7 @@ schema = [
            attr_val not null,
            constraint compkey_clientid_if_attr unique(ifname, groupID, duid, attr_code, attr_val)
            foreign key (ifname, duid) references clients(ifname, mac) on delete cascade,
+           foreign key (ifname, groupID) references client_groups(ifname, groupID) on delete cascade,
            foreign key (attr_code) references valid_v6attributes(opcode) on delete restrict);""",
         """create trigger if not exists client_insertion_v4 before insert on client_configuration
            when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) == 0
