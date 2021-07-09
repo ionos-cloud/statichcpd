@@ -478,6 +478,15 @@ def start_server() -> None:
                             deactivate_and_stop_polling(poller_obj, ifcache_entry)
                             ifcache.delete(ifcache_entry)
                             continue
+
+                        # This is a strange case where ifname in sock.recvfrom doesn't match
+                        # our interface name!
+                        if ifname != ifcache_entry.ifname:
+                            logger.error("Error receving packet: Socket for %s returned data"
+                                         " with interface name as %s!",
+                                          ifcache_entry.ifname, ifname)
+                            continue
+
                         try:
                             eth = dpkt.ethernet.Ethernet(msg)
                             isv4 = True
@@ -492,7 +501,7 @@ def start_server() -> None:
                                 continue
 
                             udp = ip.data
-                        except OSError as err:
+                        except (OSError, dpkt.NeedData) as err:
                             logger.error("Error %s receiving packet on %s. ", err, ifname)
                             continue
                         if isv4:
