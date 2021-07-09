@@ -21,6 +21,26 @@ __all__ = ["schema", "DHCP_IP_OPCODE", "DHCP_NON_DEFAULT_SERVERID_OPCODE",
 
 dhcp_db_conn = None
 
+'''
+Semantic of sqlite triggers defined in the schema:
+
+client_insertion_v4/client_insertion_v6:
+ Upon insertion of data into 'client_configuration'/'client_v6configuration',
+ if (there are no entries for this ifname in 'client_groups' table OR
+     the existing entry has a non-NULL value in groupID):
+     Attempt to insert the new entry
+     # This would trigger a UNIQUE constraint error if a valid entry already exists
+
+client_replace_v4/client_replace_v6:
+ Upon insertion of data into 'client_configuration'/'client_v6configuration',
+ if the existing entry in 'client_groups' has a NULL value for groupID:
+     Replace the existing entry with new one
+     # This is aimed at supporting migration from older controller which doesn't
+     # populate groupID and hence, would have NULL value in this field. But, since the
+     # current controller cleans up all data before populating new one, this is not
+     # a mandatory step, but rather a precautionary step.
+'''
+
 schema = [
         """create table if not exists valid_attributes(
            opcode int not null,
@@ -122,6 +142,13 @@ class dtype(Enum):
     IA = 7
     PD = 8
 
+'''
+The select commands are designed such that, groupID of ports is only taken into
+consideration if the interface on which the packet was received, has a non-NULL
+groupID. If the groupID of receiving interface is NULL, the logic falls back to
+using <ifname, mac> as the key for lookup
+'''
+
 class DHCPv4DB(object):
     select_command = """ select valid_attributes.opcode, valid_attributes.max_count,
                          valid_attributes.datatype, client_configuration.attr_val,
@@ -129,8 +156,14 @@ class DHCPv4DB(object):
                          from client_configuration
                          join valid_attributes on
                          client_configuration.attr_code = valid_attributes.opcode
-                         where mac=? and ifname in (select client_groups.ifname from client_groups
-                         where client_groups.groupID=(select groupID from client_groups where client_groups.ifname=?))"""
+                         where mac=:client_id and
+                         case when (select count(*) from client_groups where client_groups.ifname=:ifname
+                                    and client_groups.groupID is NULL) == 0
+                              then ifname in (select client_groups.ifname from client_groups
+                                   where client_groups.groupID=(select groupID from client_groups
+                                   where client_groups.ifname=:ifname))
+                              else ifname=:ifname
+                         end;"""
 
  
 class DHCPv6DB(object):
@@ -140,8 +173,14 @@ class DHCPv6DB(object):
                          from client_v6configuration
                          join valid_v6attributes on
                          client_v6configuration.attr_code = valid_v6attributes.opcode
-                         where duid=? and ifname in (select client_groups.ifname from client_groups
-                         where client_groups.groupID = (select groupID from client_groups where client_groups.ifname=?))"""
+                         where duid=:client_id and
+                         case when (select count(*) from client_groups where client_groups.ifname=:ifname
+                                    and client_groups.groupID is NULL) == 0
+                              then ifname in (select client_groups.ifname from client_groups
+                                   where client_groups.groupID = (select groupID from client_groups
+                                   where client_groups.ifname=:ifname))
+                              else ifname=:ifname
+                         end;"""
 
 migrate_cfgs_cmd = ["""insert into clients select ifname, mac from client_configuration where not exists(
                        select 1 from clients where ifname=ifname and mac=mac);""",
@@ -227,7 +266,8 @@ def fetch_host_conf_data(db_obj: Union[DHCPv4DB, DHCPv6DB], ifname: str,
         return result, None
     cursor = dhcp_db_conn.cursor()
     client_if = None
-    for (opcode, max_count, datatype, value, iface) in cursor.execute(db_obj.select_command, (str(client_id), ifname)):
+    for (opcode, max_count, datatype, value, iface) in cursor.execute(db_obj.select_command,
+                                            {"client_id": str(client_id), "ifname": ifname}):
         if client_if and client_if != iface:
             logger.error("Multiple server interfaces %s match the client ID %s",
                           [client_if, iface], client_id)
