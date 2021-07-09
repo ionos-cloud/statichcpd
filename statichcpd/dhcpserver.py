@@ -136,7 +136,7 @@ def is_served_intf(ifname: str) -> bool:
         return bool(server_regexobj.search(ifname))
     return False
 
-def get_ifidx(ifname: str) -> Any:
+def get_ifidx(ifname: str) -> Optional[int]:
     ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
     if not ifcache_entry:
         logger.error("Configured server interface %s is not in the tracked interface list!",
