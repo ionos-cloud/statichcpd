@@ -22,23 +22,12 @@ __all__ = ["schema", "DHCP_IP_OPCODE", "DHCP_NON_DEFAULT_SERVERID_OPCODE",
 dhcp_db_conn = None
 
 '''
-Semantic of sqlite triggers defined in the schema:
-
-client_insertion_v4/client_insertion_v6:
- Upon insertion of data into 'client_configuration'/'client_v6configuration',
- if (there are no entries for this ifname in 'client_groups' table OR
-     the existing entry has a non-NULL value in groupID):
-     Attempt to insert the new entry
-     # This would trigger a UNIQUE constraint error if a valid entry already exists
-
-client_replace_v4/client_replace_v6:
- Upon insertion of data into 'client_configuration'/'client_v6configuration',
- if the existing entry in 'client_groups' has a NULL value for groupID:
-     Replace the existing entry with new one
-     # This is aimed at supporting migration from older controller which doesn't
-     # populate groupID and hence, would have NULL value in this field. But, since the
-     # current controller cleans up all data before populating new one, this is not
-     # a mandatory step, but rather a precautionary step.
+In a scenario where the controller has not adapted to the new feature of
+'port grouping' or if we have non-empty database left from previously running
+version, the database will have NULL values in the groupID field. In such a
+scenario, the triggers are defined such that it attempts to replace existing
+entry with a valid groupID and not attempt to insert and fail with UNIQUE
+constraint failure.
 '''
 
 schema = [
@@ -146,10 +135,11 @@ class dtype(Enum):
     PD = 8
 
 '''
-The select commands are designed such that, groupID of ports is only taken into
-consideration if the interface on which the packet was received, has a non-NULL
-groupID. If the groupID of receiving interface is NULL, the logic falls back to
-using <ifname, mac> as the key for lookup
+In a scenario where the controller has not adapted to the new feature of
+'port grouping' or if we have non-empty database left from previously running
+version, the database will have NULL values in the groupID field. In such a
+case, fallback to the lookup that matches <ifname and mac>, without considering
+interface grouping.
 '''
 
 class DHCPv4DB(object):
@@ -160,11 +150,11 @@ class DHCPv4DB(object):
                          join valid_attributes on
                          client_configuration.attr_code = valid_attributes.opcode
                          where mac=:client_id and
-                         case when (select count(*) from client_groups where client_groups.ifname=:ifname
-                                    and client_groups.groupID is NULL) == 0
-                              then ifname in (select client_groups.ifname from client_groups
-                                   where client_groups.groupID=(select groupID from client_groups
-                                   where client_groups.ifname=:ifname))
+                         case when (select count(*) from client_groups where ifname=:ifname
+                                    and groupID is NULL) == 0
+                              then ifname in (select ifname from client_groups
+                                   where groupID=(select groupID from client_groups
+                                   where ifname=:ifname))
                               else ifname=:ifname
                          end;"""
 
@@ -177,11 +167,11 @@ class DHCPv6DB(object):
                          join valid_v6attributes on
                          client_v6configuration.attr_code = valid_v6attributes.opcode
                          where duid=:client_id and
-                         case when (select count(*) from client_groups where client_groups.ifname=:ifname
-                                    and client_groups.groupID is NULL) == 0
-                              then ifname in (select client_groups.ifname from client_groups
-                                   where client_groups.groupID = (select groupID from client_groups
-                                   where client_groups.ifname=:ifname))
+                         case when (select count(*) from client_groups where ifname=:ifname
+                                    and groupID is NULL) == 0
+                              then ifname in (select ifname from client_groups
+                                   where groupID = (select groupID from client_groups
+                                   where ifname=:ifname))
                               else ifname=:ifname
                          end;"""
 
