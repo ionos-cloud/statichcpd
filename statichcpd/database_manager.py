@@ -28,6 +28,10 @@ version, the database will have NULL values in the groupID field. In such a
 scenario, the triggers are defined such that it attempts to replace existing
 entry with a valid groupID and not attempt to insert and fail with UNIQUE
 constraint failure.
+
+Also, additional triggers, 'client_insertion' and 'client_deletion', are defined
+to make the new version of statichcp compatible with old controller code which
+attempts to directly populate the 'clients' table before configuring the config tables.
 '''
 
 schema = [
@@ -70,42 +74,52 @@ schema = [
            foreign key (ifname, duid) references clients(ifname, mac) on delete cascade,
            foreign key (ifname, groupID) references client_groups(ifname, groupID) on delete cascade,
            foreign key (attr_code) references valid_v6attributes(opcode) on delete restrict);""",
-        """create trigger if not exists client_insertion_v4 before insert on client_configuration
+        """create trigger if not exists client_insertion before insert on clients
+           begin
+           insert into client_groups (ifname, groupID) select new.ifname, NULL where not exists(
+           select 1 from client_groups where ifname=new.ifname);
+           end;""",
+        """create trigger if not exists client_deletion after delete on clients
+           when (select count(*) from clients where ifname=old.ifname) == 0
+           begin
+           delete from client_groups where ifname=old.ifname;
+           end;""",
+        """create trigger if not exists client_v4_cfg_insertion before insert on client_configuration
            when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) == 0
            begin
+           insert into client_groups (ifname, groupID) select new.ifname, new.groupID where not exists(
+           select 1 from client_groups where ifname=new.ifname and groupID=new.groupID);
            insert into clients (ifname, mac) select new.ifname, new.mac where not exists(
            select 1 from clients where ifname=new.ifname and mac=new.mac);
-           insert into client_groups (ifname, groupID) select new.ifname, new.groupID where not exists(
-           select 1 from client_groups where ifname=new.ifname and groupID=new.groupID);
            end;""",
-        """create trigger if not exists client_replace_v4 before insert on client_configuration
+        """create trigger if not exists client_v4_cfg_replace before insert on client_configuration
            when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) > 0
            begin
-           replace into clients (ifname, mac) values (new.ifname, new.mac);
            replace into client_groups (ifname, groupID) values (new.ifname, new.groupID);
+           replace into clients (ifname, mac) values (new.ifname, new.mac);
            end;""",
-        """create trigger if not exists client_insertion_v6 before insert on client_v6configuration
+        """create trigger if not exists client_v6_cfg_insertion before insert on client_v6configuration
            when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) == 0
            begin
-           insert into clients (ifname, groupID) select new.ifname, new.duid where not exists(
-           select 1 from clients where ifname=new.ifname and mac=new.duid);
            insert into client_groups (ifname, groupID) select new.ifname, new.groupID where not exists(
            select 1 from client_groups where ifname=new.ifname and groupID=new.groupID);
+           insert into clients (ifname, groupID) select new.ifname, new.duid where not exists(
+           select 1 from clients where ifname=new.ifname and mac=new.duid);
            end;""",
-        """create trigger if not exists client_replace_v6 before insert on client_v6configuration
+        """create trigger if not exists client_v6_cfg_replace before insert on client_v6configuration
            when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) > 0
            begin
-           replace into clients (ifname, mac) values (new.ifname, new.duid);
            replace into client_groups (ifname, groupID) values (new.ifname, new.groupID);
+           replace into clients (ifname, mac) values (new.ifname, new.duid);
            end;""",
-        """create trigger if not exists client_deletion_v4 after delete on client_configuration
+        """create trigger if not exists client_v4_cfg_deletion after delete on client_configuration
            when (select count(*) from client_configuration where ifname=old.ifname and mac=old.mac) == 0
            and (select count(*) from client_v6configuration where ifname=old.ifname and duid=old.mac) == 0
            begin
            delete from clients where ifname=old.ifname and mac=old.mac;
            delete from client_groups where ifname=old.ifname and groupID=old.groupID;
            end;""",
-        """create trigger if not exists client_deletion_v6 after delete on client_v6configuration
+        """create trigger if not exists client_v6_cfg_deletion after delete on client_v6configuration
            when (select count(*) from client_v6configuration where ifname=old.ifname and duid=old.duid) == 0
            and (select count(*) from client_configuration where ifname=old.ifname and mac=old.duid) == 0
            begin
