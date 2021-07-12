@@ -1,0 +1,15 @@
+[Unit]
+Description=Static Host Configuration Protocol Daemon in namespace %I
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/statichcpd
+
+ExecStart=sh -c "(ip netns add %I ; \
+            exec ip netns exec %I /usr/bin/python3 -m statichcpd $OPTIONS)"
+KillSignal=INT
+PIDFile=/run/statichcpd.%I.pid
+
+StandardOutput=journal
+StandardError=inherit
