@@ -26,15 +26,15 @@ default_t2 = 0
 default_pref_lifetime = 0
 default_valid_lifetime = 0
 
-def init(config: SectionProxy) -> None:
+def init(config: Dict[str, Any]) -> None:
     global use_mac_as_duid, disable_ia_id
     global default_t1, default_t2, default_pref_lifetime, default_valid_lifetime
-    use_mac_as_duid = config.getboolean('use_mac_as_client_duid', fallback=False)
-    disable_ia_id = config.getboolean('disable_ia_id', fallback=False)
-    default_t1 = config.getint('default_renew_time', fallback=1000)
-    default_t2 = config.getint('default_rebind_time', fallback=2000)
-    default_pref_lifetime = config.getint('default_pref_lifetime', fallback=3000)
-    default_valid_lifetime = config.getint('default_valid_lifetime', fallback=4000)
+    use_mac_as_duid = bool(config.get('use_mac_as_client_duid', False))
+    disable_ia_id = bool(config.get('disable_ia_id', False))
+    default_t1 = int(config.get('default_renew_time', 1000))
+    default_t2 = int(config.get('default_rebind_time', 2000))
+    default_pref_lifetime = int(config.get('default_pref_lifetime', 3000))
+    default_valid_lifetime = int(config.get('default_valid_lifetime', 4000))
  
 # Message Validation: RFC 3315 Section 15
 

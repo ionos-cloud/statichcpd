@@ -27,10 +27,10 @@ dhcppacket_type = dhcp.DHCP
 default_lease_time = 0
 max_lease_time = 0
 
-def init(config: SectionProxy) -> None:
+def init(config: Dict[str, Any]) -> None:
     global default_lease_time, max_lease_time
-    default_lease_time = config.getint('default_lease_time')
-    max_lease_time = config.getint('max_lease_time')
+    default_lease_time = int(config.get('default_lease_time', 60))
+    max_lease_time = int(config.get('max_lease_time', 7200))
 
 def mac_addr(address: bytes) -> str:
     return ':'.join('%02x' % compat_ord(b) for b in address)

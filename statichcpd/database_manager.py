@@ -218,7 +218,7 @@ def populate_table_from(table_name: str, csv_filename: str) -> None:
             cursor.execute(query, data)
     dhcp_db_conn.commit()
 
-def init(config: SectionProxy) -> None:
+def init(config: Dict[str, Any]) -> None:
     dhcp_db_name = config['dhcp_db_filename']
     global dhcp_db_conn
     dhcp_db_name = str(dhcp_db_name) if type(dhcp_db_name) is not str else dhcp_db_name
@@ -247,7 +247,7 @@ def init(config: SectionProxy) -> None:
 
     # Insert user defined attributes, if any
     if 'additional_attributes_file' in config:
-        populate_table_from('valid_attributes', config.get('additional_attributes_file'))
+        populate_table_from('valid_attributes', str(config['additional_attributes_file']))
 
     #Populate the valid_v6attributes table
 
@@ -256,7 +256,7 @@ def init(config: SectionProxy) -> None:
 
     # Insert user defined attributes, if any
     if 'additional_v6attributes_file' in config:
-        populate_table_from('valid_v6attributes', config.get('additional_v6attributes_file'))
+        populate_table_from('valid_v6attributes', str(config['additional_v6attributes_file']))
 
 def exit() -> None:
     global dhcp_db_conn

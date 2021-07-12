@@ -35,11 +35,11 @@ server_regexobj = None
 routing_disabled = False
 dhcp_ratelimit = 1000
 
-def init(config: SectionProxy) -> None:
+def init(config: Dict[str, Any]) -> None:
     global server_regexobj, routing_disabled, dhcp_ratelimit
     server_regexobj = re.compile(config['served_interface_regex'])
-    routing_disabled = config.getboolean('routing_disabled', fallback=False)
-    dhcp_ratelimit = config.getint('dhcp_ratelimit', fallback=1000)
+    routing_disabled = bool(config.get('routing_disabled', False))
+    dhcp_ratelimit = int(config.get('dhcp_ratelimit', 1000))
 
 def get_mac_address(ifname: str) -> Optional[Mac]:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
