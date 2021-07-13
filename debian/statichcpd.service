@@ -7,9 +7,9 @@ Type=simple
 EnvironmentFile=-/etc/default/statichcpd
 
 ExecStartPre=sh -c "test x$NAMESPACE = x && true \
-        || systemctl start statichcpd@$NAMESPACE.service
+        || systemctl start statichcpd@$NAMESPACE.service"
 ExecStopPost=sh -c "test x$NAMESPACE = x && true \
-        || systemctl stop statichcpd@$NAMESPACE.service
+        || systemctl stop statichcpd@$NAMESPACE.service"
 ExecStart=/usr/bin/python3 -m statichcpd $OPTIONS
 KillSignal=INT
 PIDFile=/run/statichcpd.pid
