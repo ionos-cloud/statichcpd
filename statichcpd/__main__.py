@@ -15,7 +15,8 @@ from . import dhcp6_packet_mgr
 
 if __name__ == "__main__":
 
-    config_dir = '/etc/statichcpd' # Default config file directory
+    config_file = '/etc/statichcpd/statichcpd.conf' # Default config file path
+    addn_config_dir = None
 
     argparser = ArgumentParser()
     argparser.add_argument('-v', '--verbose',
@@ -25,21 +26,35 @@ if __name__ == "__main__":
                         help="Do not daemonize and log to stdout",
                         action="store_true")
 
-    argparser.add_argument('-c', '--config_dir',
+    argparser.add_argument('-c', '--config_file',
                         type=Path,
-                        help="Specify the config file directory")
+                        help="Specify the default config file")
+
+    argparser.add_argument('-a', '--config_dir',
+                        type=Path,
+                        help="Specify the directory for additionaly config file lookup")
 
     namespace = argparser.parse_args()
     set_log_config(namespace)
+
+    if namespace.config_file is not None:
+        config_file = namespace.config_file
     if namespace.config_dir is not None:
-        config_dir = namespace.config_dir
+        addn_config_dir = namespace.config_dir
+
     config = configparser.ConfigParser()
+
+    # Load default configuration
     statichcpd_config: Dict[str, Any] = dict()
-    if not os.path.isdir(config_dir) or not os.listdir(config_dir):
-        raise NotADirectoryError(config_dir)
-    for conf_file in sorted([el for el in os.listdir(config_dir) if el.endswith('.conf')]):
-        config.read(config_dir + '/' + conf_file)
-        statichcpd_config.update(config['statichcpd'])
+    config.read(config_file)
+    statichcpd_config.update(config['statichcpd'])
+
+    # Load any additional configuration
+    if addn_config_dir and os.path.isdir(addn_config_dir) and \
+           os.listdir(addn_config_dir):
+        for conf_file in sorted([el for el in os.listdir(addn_config_dir) if el.endswith('.conf')]):
+            config.read(addn_config_dir + '/' + conf_file)
+            statichcpd_config.update(config['statichcpd'])
 
     database_manager.init(statichcpd_config)
     dhcpserver.init(statichcpd_config)
