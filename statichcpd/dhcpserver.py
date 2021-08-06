@@ -272,13 +272,13 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
     if nl_event not in ['RTM_NEWLINK', 'RTM_DELLINK', 'RTM_NEWADDR', 'RTM_DELADDR']:
         return
     if nl_event == 'RTM_NEWLINK':
-        ifname = nlmsg.IFLA_IFNAME.value
-        state = nlmsg.IFLA_OPERSTATE.value
+        ifname = nlmsg.get_attr("IFLA_IFNAME")
+        state = nlmsg.get_attr("IFLA_OPERSTATE")
         if not is_served_intf(ifname):
             return
         if_mac = None
-        if nlmsg.IFLA_ADDRESS.value:
-            if_mac = Mac(nlmsg.IFLA_ADDRESS.value)
+        if nlmsg.get_attr("IFLA_ADDRESS"):
+            if_mac = Mac(nlmsg.get_attr("IFLA_ADDRESS"))
         ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
         if ifcache_entry is None:
             ifcache_entry = ifcache.add(ifname, if_index)
@@ -297,7 +297,7 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         ifcache_entry.up = True
         activate_and_start_polling(poller_obj, ifcache_entry)
     elif nl_event == 'RTM_DELLINK':
-        ifname = nlmsg.IFLA_IFNAME.value
+        ifname = nlmsg.get_attr("IFLA_IFNAME")
         if not is_served_intf(ifname):
             return
         logger.debug("%s notif for %s ", nl_event, ifname)
@@ -308,11 +308,11 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         deactivate_and_stop_polling(poller_obj, ifcache_entry)
         ifcache.delete(ifcache_entry)
     elif nl_event == 'RTM_NEWADDR':
-        ifname = nlmsg.IFA_LABEL.value
+        ifname = nlmsg.get_attr("IFA_LABEL")
         if not is_served_intf(ifname):
             return
         logger.debug("%s notif for %s ", nl_event, ifname)
-        ifaddr = nlmsg.IFA_ADDRESS.value
+        ifaddr = nlmsg.get_attr("IFA_ADDRESS")
         ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
         if ifcache_entry is None:
             logger.debug("Ignoring %s for interface %s which is not in cache", nl_event, ifname)
@@ -321,7 +321,7 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         # Set the up state to True
         ifcache_entry.ip = ifaddr
     else: # Case of RTM_DELADDR
-        ifname = nlmsg.IFA_LABEL.value
+        ifname = nlmsg.get_attr("IFA_LABEL")
         if not is_served_intf(ifname):
             return
         logger.debug("%s notif for %s ", nl_event, ifname)
@@ -400,8 +400,8 @@ def start_server() -> None:
     #    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
 
         for intf in nlsock.get_links():
-            state = intf.IFLA_OPERSTATE.value
-            ifname = intf.IFLA_IFNAME.value
+            state = intf.get_attr("IFLA_OPERSTATE")
+            ifname = intf.get_attr("IFLA_IFNAME")
             if is_served_intf(ifname):
                 try:
                     idx = nlsock.link_lookup(ifname=ifname)[0]
