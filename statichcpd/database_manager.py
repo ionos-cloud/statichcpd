@@ -234,7 +234,8 @@ def populate_table_from(table_name: str, csv_filename: str) -> None:
     with open (csv_filename, 'r') as f:
         reader = csv.reader(f)
         columns = next(reader)
-        query = 'insert into {0}({1}) values ({2})'.format(table_name, ','.join(columns), ','.join('?' * len(columns)))
+        query = 'insert or replace into {0}({1}) values ({2})'.format(table_name,
+                                     ','.join(columns), ','.join('?' * len(columns)))
         for row in reader:
             # Opcode can be an integer or dpkt.dhcp module optcode alias
             try:
@@ -245,7 +246,6 @@ def populate_table_from(table_name: str, csv_filename: str) -> None:
             except:
                 data = (str(row[0]), row[1], str(eval("dtype." + row[2] + ".value")))
             cursor.execute(query, data)
-    dhcp_db_conn.commit()
 
 def init(config: Dict[str, Any]) -> None:
     global dhcp_db_conn
@@ -270,9 +270,15 @@ def init(config: Dict[str, Any]) -> None:
         pass
     dhcp_db_conn.commit()
 
+    '''
+    "valid_attributes" and "valid_v6attributes" tables are shared among all
+    instances of statichcpd. Hence, cleanup of attributes table and their
+    complete re-population need to be done in a single transaction to avoid
+    conflicting writes from multiple users.
+    '''
+
     cursor.execute('delete from valid_attributes')
     cursor.execute('delete from valid_v6attributes')
-    dhcp_db_conn.commit()
 
     #Populate the valid_attributes (v4) table
 
@@ -291,6 +297,7 @@ def init(config: Dict[str, Any]) -> None:
     # Insert user defined attributes, if any
     if 'additional_v6attributes_file' in config:
         populate_table_from('valid_v6attributes', str(config['additional_v6attributes_file']))
+    dhcp_db_conn.commit()
 
     # Migrate configs from a non-empty database
     for command in migrate_cfgs_cmd:
