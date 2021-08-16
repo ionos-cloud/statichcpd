@@ -451,7 +451,7 @@ def process_dhcp_packet(ifname: str, server_addr: Optional[str], pkt_src_mac: Ma
         logger.debug("Received DHCP packet of type %s. Ignoring.", dhcp_type_to_str.get(dhcp_type, dhcp_type))
         dhcp_pkt, address, server_id, server_iface = err_return_val
     else:
-        logger.error("Unexpected packet type %d for DHCP payload", dhcp_type)
+        logger.error("Unexpected packet type %s for DHCP payload", dhcp_type)
         dhcp_pkt, address, server_id, server_iface = err_return_val
 
     if dhcp_pkt is None or address is None:

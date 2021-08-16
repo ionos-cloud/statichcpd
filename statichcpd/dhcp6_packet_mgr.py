@@ -700,7 +700,7 @@ def process_dhcp6_packet(ifname: str, dhcp6_msg: Message,
     elif isinstance(payload, Message.RelayServerDHCP6):
         pkt, server_iface = process_relay_server_msg(ifname, payload, server_duid, src_mac)
     else:
-        logger.error("Malformed packet with unknown DHCP msg type %d received", type(payload))
+        logger.error("Malformed packet with unknown DHCP msg type %s received", type(payload))
         pkt = None
 
     return (pkt, direct_unicast_from_client, server_iface)
