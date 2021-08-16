@@ -45,7 +45,12 @@ def fetch_dhcp_opt(dhcp_obj: dhcp.DHCP, opt: int) -> Any:
 
 def fetch_dhcp_type(dhcp_obj: dhcp.DHCP) -> int:
     data = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_MSGTYPE)
-    mtype: int = struct.unpack("b", data)[0] if data else None
+    try:
+        mtype: int = struct.unpack("b", data)[0] if data else None
+    except:
+        # Catch any posible unpack errors
+        # eg: If the received data is not of length 1 byte, unpack will fail
+        return None
     return mtype
 
 def fetch_dhcp_req_ip(dhcp_obj: dhcp.DHCP) -> Optional[IPv4Address]:
