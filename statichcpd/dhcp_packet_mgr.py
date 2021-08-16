@@ -43,7 +43,7 @@ def fetch_dhcp_opt(dhcp_obj: dhcp.DHCP, opt: int) -> Any:
                  opt, str(Mac(dhcp_obj.chaddr)))
     return None
 
-def fetch_dhcp_type(dhcp_obj: dhcp.DHCP) -> int:
+def fetch_dhcp_type(dhcp_obj: dhcp.DHCP) -> Optional[int]:
     data = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_MSGTYPE)
     try:
         mtype: int = struct.unpack("b", data)[0] if data else None
@@ -60,7 +60,7 @@ def fetch_dhcp_req_ip(dhcp_obj: dhcp.DHCP) -> Optional[IPv4Address]:
     except Exception as err:
         opcode = fetch_dhcp_type(dhcp_obj)
         logger.debug("%s: Failed to parse requested IP (%s) for %s packet from %s",
-                        err, data, dhcp_type_to_str.get(opcode, opcode),
+                        err, data, dhcp_type_to_str.get(opcode, opcode) if opcode else None,
                         str(Mac(dhcp_obj.chaddr)))
         return None
 
@@ -439,7 +439,8 @@ def process_dhcp_packet(ifname: str, server_addr: Optional[str], pkt_src_mac: Ma
                                                                        Optional[str]]:
     err_return_val: Tuple[None, None, IPv4Address, None] = (None, None, IPv4Address(0), None)
     dhcp_type = fetch_dhcp_type(dhcp_obj)
-    logger.debug("Received DHCP packet on %s of type %s", ifname, dhcp_type_to_str.get(dhcp_type, dhcp_type))
+    logger.debug("Received DHCP packet on %s of type %s", ifname,
+                  dhcp_type_to_str.get(dhcp_type, dhcp_type) if dhcp_type else None)
 
     try:
         server_id = IPv4Address(server_addr)
@@ -480,5 +481,6 @@ def process_dhcp_packet(ifname: str, server_addr: Optional[str], pkt_src_mac: Ma
                      None, IPv4Address(0), server_iface)
     except (AddressValueError, ValueError) as err:
         logger.error("Error %s building dhcp reply for %s packet from source mac %s",
-                      err, dhcp_type_to_str.get(dhcp_type, dhcp_type), str(pkt_src_mac))
+                      err, dhcp_type_to_str.get(dhcp_type, dhcp_type)
+                      if dhcp_type else None, str(pkt_src_mac))
         return err_return_val
