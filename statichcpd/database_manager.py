@@ -3,6 +3,7 @@
 import sqlite3
 from dpkt import dhcp
 from typing import Tuple, List, Any, Dict, Optional, Union
+from time import sleep
 import os
 from ipaddress import IPv4Address
 from enum import Enum
@@ -256,7 +257,30 @@ def init(config: Dict[str, Any]) -> None:
     if dhcp_db_conn is None:
         raise Exception("Connecting to DHCP db {} failed".format(dhcp_db_name))
 
-    dhcp_db_conn.execute('pragma journal_mode=WAL')
+    '''
+    Updating journal_mode is a persistent update and hence,
+    can result in 'database locked' error if a concurrent
+    writer is in middle of a transaction, unlike regular
+    sql writes that waits until connection timeout to quit.
+    '''
+    retry = 3
+    for i in range(retry):
+        try:
+            dhcp_db_conn.execute('pragma journal_mode=WAL')
+            logger.info("Connected to %s and set journal mode", dhcp_db_name)
+            break
+        except sqlite3.OperationalError as e:
+            if e.args and 'database is locked' in e.args[0]:
+                logger.error("%s while connecting to %s. Retrying..",
+                          e.args[0], dhcp_db_name)
+                retry -= 1
+                sleep(0.5)
+            else:
+                raise e
+    else:
+        dhcp_db_conn.execute('pragma journal_mode=WAL')
+        logger.info("Connected to %s and set journal mode", dhcp_db_name)
+
     cursor = dhcp_db_conn.cursor()
     for command in schema:
         cursor.execute(command)
@@ -310,10 +334,12 @@ def init(config: Dict[str, Any]) -> None:
     if dhcp_db_conn is None:
         raise Exception("Re-connecting to DHCP db {} failed".format(dhcp_db_name))
     dhcp_db_conn.execute('pragma foreign_keys=on')
+    dhcp_db_conn.commit()
 
 def exit() -> None:
     global dhcp_db_conn
     if dhcp_db_conn is not None:
+        dhcp_db_conn.commit()
         dhcp_db_conn.close()
     logger.debug("Closed the connection to DHCP database")
 
