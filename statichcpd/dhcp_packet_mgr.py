@@ -433,7 +433,8 @@ def build_frame(dhcp_data: bytes, dest_mac: Mac, dest_ip: IPv4Address,
 # If there is a new msg in any of the dhcp intfs, process the data  (Incomplete)
 
 def process_dhcp_packet(ifname: str, server_addr: Optional[str], pkt_src_mac: Mac,
-                        dhcp_obj: dhcp.DHCP, server_mac: Mac) -> Tuple[Optional[bytes],
+                        dhcp_obj: dhcp.DHCP, server_mac: Mac,
+                        return_frame: bool) -> Tuple[Optional[bytes],
                                                                        Optional[Tuple[IPv4Address, int]],
                                                                        IPv4Address,
                                                                        Optional[str]]:
@@ -471,14 +472,16 @@ def process_dhcp_packet(ifname: str, server_addr: Optional[str], pkt_src_mac: Ma
 
     # How to handle L2 relay agents??
     try:
-        if not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
-            return (dhcp_pkt, (IPv4Address(dhcp_obj.ciaddr), 68), server_id, server_iface)
-        elif not IPv4Address(dhcp_obj.giaddr).is_unspecified:
-            return (dhcp_pkt, (IPv4Address(dhcp_obj.giaddr), 67), server_id, server_iface)
-        else:
+        if return_frame or (IPv4Address(dhcp_obj.ciaddr).is_unspecified \
+                                      and IPv4Address(dhcp_obj.giaddr).is_unspecified):
             dest_mac = Mac(dhcp_obj.chaddr)
             return (build_frame(dhcp_pkt, dest_mac, address, server_id, ifname, server_mac),
                      None, IPv4Address(0), server_iface)
+        elif not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
+            return (dhcp_pkt, (IPv4Address(dhcp_obj.ciaddr), 68), server_id, server_iface)
+        else: # Case of valid dhcp_obj.giaddr
+            return (dhcp_pkt, (IPv4Address(dhcp_obj.giaddr), 67), server_id, server_iface)
+
     except (AddressValueError, ValueError) as err:
         logger.error("Error %s building dhcp reply for %s packet from source mac %s",
                       err, dhcp_type_to_str.get(dhcp_type, dhcp_type)

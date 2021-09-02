@@ -14,6 +14,7 @@ from .datatypes import *
 from .database_manager import *
 from .logmgr import logger
 from .dhcp6 import *
+from .utils import strtobool
 
 use_mac_as_duid = False
 disable_ia_id = False
@@ -29,8 +30,8 @@ default_valid_lifetime = 0
 def init(config: Dict[str, Any]) -> None:
     global use_mac_as_duid, disable_ia_id
     global default_t1, default_t2, default_pref_lifetime, default_valid_lifetime
-    use_mac_as_duid = bool(config.get('use_mac_as_client_duid', False))
-    disable_ia_id = bool(config.get('disable_ia_id', False))
+    use_mac_as_duid = strtobool(config.get('use_mac_as_client_duid', 'False'))
+    disable_ia_id = strtobool(config.get('disable_ia_id', 'False'))
     default_t1 = int(config.get('default_renew_time', 1000))
     default_t2 = int(config.get('default_rebind_time', 2000))
     default_pref_lifetime = int(config.get('default_pref_lifetime', 3000))

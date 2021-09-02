@@ -26,19 +26,27 @@ from .database_manager import exit
 from .datatypes import *
 from .logmgr import logger
 from .dhcp6 import *
+from .utils import strtobool
 
 #  If there is a new NL msg, add the new interface to poll if it's create
 #  and remove the intf from poll if it's delete
 
 any_nlmsg = TypeVar('any_nlmsg', ifinfmsg, ifaddrmsg)
 server_regexobj = None
-routing_disabled = False
+routing_disabled_with_udpsock = False
+routing_disabled_with_rawsock = False
 dhcp_ratelimit = 1000
 
 def init(config: Dict[str, Any]) -> None:
-    global server_regexobj, routing_disabled, dhcp_ratelimit
+    global server_regexobj, routing_disabled_with_udpsock,\
+           routing_disabled_with_rawsock, dhcp_ratelimit
     server_regexobj = re.compile(config['served_interface_regex'])
-    routing_disabled = bool(config.get('routing_disabled', False))
+    routing_disabled_with_udpsock = strtobool(config.get('disable_routing_with_udpsock', 'False'))
+    routing_disabled_with_rawsock = strtobool(config.get('disable_routing_with_rawsock', 'False'))
+    if routing_disabled_with_udpsock and routing_disabled_with_rawsock:
+        logger.error("Invalid configuration: routing disabled_with udpsock=%s rawsock=%s",
+                      routing_disabled_with_udpsock, routing_disabled_with_rawsock)
+        raise Exception
     dhcp_ratelimit = int(config.get('dhcp_ratelimit', 1000))
 
 def get_mac_address(ifname: str) -> Optional[Mac]:
@@ -245,15 +253,16 @@ def activate_and_start_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEn
         #if ifcache_entry:
         ifcache.deactivate(ifcache_entry)
 
-def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: InterfaceCacheEntry) -> None:
-    ifname = ifcache_entry.ifname
+def deactivate_and_stop_polling(poller_obj: poll, ifcache_entry: Optional[InterfaceCacheEntry]) -> None:
 
     # Skip already deactivated entries
     if ifcache_entry is None or \
        ifcache_entry.raw_fd is None :
-	       logger.debug("Ignoring non-registered intf: %s", ifname)
+	       logger.debug("Ignoring non-registered intf: %s",
+                      ifcache_entry.ifname if ifcache_entry else None)
 	       return
 
+    ifname = ifcache_entry.ifname
     try:
         if ifcache_entry.raw_fd is not None and ifcache_entry.raw_fd not in [fd for (fd,ts) in suspended]:
             poller_obj.unregister(ifcache_entry.raw_fd)
@@ -523,26 +532,48 @@ def start_server() -> None:
 
                             dhcp_frame, gw_address, server_id, server_iface = process_dhcp_packet(ifname,
                                                                                    server_ip, src_mac, dh,
-                                                                                   ifcache_entry.mac)
+                                                                                   ifcache_entry.mac,
+                                                                                   routing_disabled_with_rawsock)
                             if dhcp_frame is None:
                                 logger.error("No DHCP response sent for packet on %s", ifname)
                                 continue
                             try:
+                                # As per RFC 1542 Section 5.4:
+                                # In case the packet holds a non-zero ciaddr or giaddr,
+                                #   Reply should follow normal IP routing => Use udp socket to unicast
+                                # But 'routing_disabled_with_rawsock' or 'routing_disabled_with_udpsock'
+                                # configuration overrides this behaviour
+                                # So, raw socket is used if routing_disabled_with_rawsock = True
+                                # or if both ciaddr and giaddr are zero
+
                                 # If gw_address is None, 'dhcp_frame' is a complete ethernet frame
                                 # Else, 'dhcp_frame' is just dhcp hdr payload
                                 if gw_address is None:
-                                    intf_sock.send(dhcp_frame)
+                                    # The outgoing server intf could be different from
+                                    # incoming server intf if client grouping is enabled
+                                    if ifname != server_iface:
+                                        ifcache_entry = ifcache.fetch_ifcache_by_ifname(server_iface) \
+                                                        if server_iface else None
+                                        if not ifcache_entry:
+                                            logger.error("No server info found for server interface %s",
+                                                         server_iface)
+                                            continue
+                                    if not ifcache_entry.rawsock:
+                                        logger.error("No socket info found for server interface %s",
+                                                     server_iface)
+                                        continue
+                                    logger.debug("Unicasting DHCP reply over RAW socket: "
+                                                 "Request Src Mac:%s Server Intf: %s",
+                                                 src_mac,
+                                                 server_iface)
+                                    ifcache_entry.rawsock.send(dhcp_frame)
                                     continue
                                 else:
                                     destination_ip, port = gw_address
                                     SOL_IP_PKTINFO = 8
-                                    logger.debug("Unicasting DHCP reply: Dst IP:%s Src IP:%s Request Src Mac: %s",
-                                                  destination_ip, server_id, src_mac)
-                                    # As per RFC 1542 Section 5.4:
-                                    # In case the packet holds a non-zero ciaddr or giaddr,
-                                    #   Reply should follow normal IP routing => Use udp socket to unicast
-                                    # But if routing is disabled, specify the source interface for the reply
-                                    if routing_disabled:
+                                    # If routing is disabled with udp socket,
+                                    # specify the source interface for the reply
+                                    if routing_disabled_with_udpsock:
                                         # Non-zero intf idx and Non-default source IP used unlike
                                         # how the ip(7) linux documentation for IP_PKTINFO suggests
                                         if server_iface is None:
@@ -557,7 +588,7 @@ def start_server() -> None:
                                                        "No response sent for client %s for pkt on interface %s.",
                                                        server_iface, src_mac, ifname)
                                             continue
-                                       
+
                                         logger.debug("Routing disabled: Unicast reply to %s through interface %s",
                                                       gw_address, server_iface)
                                         pktinfo = pack('=I4s4s', server_if_idx, socket.inet_aton(str(server_id)),
@@ -566,6 +597,9 @@ def start_server() -> None:
                                         logger.debug("Routing enabled: Unicast reply to %s", gw_address)
                                         pktinfo = pack('=I4s4s', 0, socket.inet_aton(str(server_id)),
                                                                     socket.inet_aton(str(destination_ip)))
+                                    logger.debug("Unicasting DHCP reply over UDP socket: "
+                                                 "Dst IP:%s Src IP:%s Request Src Mac: %s",
+                                                  destination_ip, server_id, src_mac)
                                     v4_tx_sock.sendmsg([dhcp_frame],
                                                     [(socket.IPPROTO_IP, SOL_IP_PKTINFO, pktinfo)],
                                                     0, (str(destination_ip), port))
@@ -573,8 +607,9 @@ def start_server() -> None:
                             except OSError as err:
                                 logger.error("Error %s sending packet on %s. "
                                              " Stop servicing the interface.", err, ifname)
-                                deactivate_and_stop_polling(poller_obj, ifcache_entry)
-                                ifcache.delete(ifcache_entry)
+                                if ifcache_entry:
+                                    deactivate_and_stop_polling(poller_obj, ifcache_entry)
+                                    ifcache.delete(ifcache_entry)
                                 continue
 
                         # Case of IPv6 packet
