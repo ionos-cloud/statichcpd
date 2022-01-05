@@ -11,7 +11,7 @@ class BlackFormatter(unittest.TestCase):
             self.fail(f"black not installed.")
         cmd = (
             ["python3", "-m", "black", "--check", "--diff", "-l", "79"]
-            + glob.glob("pbsdnmgr/**/*.py", recursive=True)
+            + glob.glob("statichcpd/**/*.py", recursive=True)
             + glob.glob("test/**/*.py", recursive=True)
         )
         output = subprocess.run(cmd, capture_output=True)

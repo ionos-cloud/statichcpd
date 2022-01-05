@@ -7,9 +7,10 @@ from typing import Type
 from types import TracebackType
 import sys
 
-logger = getLogger('statichcpd')
-sfmt = '%(name)s[%(process)d]: %(levelname)s - %(message)s'
-cfmt = '%(asctime)s - %(levelname)s - %(message)s'
+logger = getLogger("statichcpd")
+sfmt = "%(name)s[%(process)d]: %(levelname)s - %(message)s"
+cfmt = "%(asctime)s - %(levelname)s - %(message)s"
+
 
 def set_log_config(logconf: Namespace) -> None:
     global logger
@@ -19,16 +20,16 @@ def set_log_config(logconf: Namespace) -> None:
         chdl.setFormatter(Formatter(cfmt))
         logger.addHandler(chdl)
 
-    shdl = SysLogHandler(address='/dev/log')
+    shdl = SysLogHandler(address="/dev/log")
     shdl.setFormatter(Formatter(sfmt))
     logger.addHandler(shdl)
 
-    def handle_exception(type_: Type[BaseException],
-                         value: BaseException,
-                         traceback: TracebackType) -> None:
-        logger.error("Uncaught exception",
-                      exc_info=(type_, value, traceback))
+    def handle_exception(
+        type_: Type[BaseException],
+        value: BaseException,
+        traceback: TracebackType,
+    ) -> None:
+        logger.error("Uncaught exception", exc_info=(type_, value, traceback))
         sys.exit(-1)
 
     sys.excepthook = handle_exception
-
