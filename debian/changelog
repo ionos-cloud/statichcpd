@@ -1,5 +1,19 @@
 statichcpd (3.0) all-stretch; urgency=medium
 
+  * SDN-1045: Introduce grouping of ports and trigger based configuration
+  * Update regex for served interfaces
+  * SDN-1036: Do not use "magic attributes" of nlmsg
+  * SDN-1079: Fix intermittent unique constraint failure
+  * Fix: None type msgtype causes crash while logging
+  * Fix: Crash while handling invalid msgtype value > 1 byte
+  * Fix mypy errors
+  * SDN-1090: Fix database locked error
+  * SDN-1104: Introduce disabling of routing using raw socket
+
+ -- Reshma Sreekumar <reshma.sreekumar@ionos.com>  Mon, 10 Jan 2022 12:53:43 +0000
+
+statichcpd (2.03) all-stretch; urgency=medium
+
   * Updated README
   * Updated README: New edge case behavior
   * Fix: Incident 60043
