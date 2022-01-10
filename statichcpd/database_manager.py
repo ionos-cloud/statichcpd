@@ -400,7 +400,7 @@ def fetch_host_conf_data(db_obj: Union[DHCPv4DB, DHCPv6DB], ifname: str,
             elif datatype is dtype.PD:
                 try:
                     ia_id, ia_pd = value.split(',')
-                    result[opcode].extend([(ia_id.strip(), IPv6Network(ia_addr.strip()))])
+                    result[opcode].extend([(ia_id.strip(), IPv6Network(ia_pd.strip()))])
                 except ValueError:
                     result[opcode].append(IPv6Network(value))
             elif datatype is dtype.STRING:
