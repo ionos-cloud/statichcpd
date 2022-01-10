@@ -1,4 +1,4 @@
-statichcpd (3.0) all-stretch; urgency=medium
+statichcpd (3.0) all-bionic-stretch; urgency=medium
 
   * SDN-1045: Introduce grouping of ports and trigger based configuration
   * Update regex for served interfaces
