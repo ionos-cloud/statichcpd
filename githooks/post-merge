@@ -1,0 +1,33 @@
+#!/bin/sh
+
+# MAIN is the "upstream mainline" branch into which your merges go, and
+# which is subsequently pushed to the remote repo.
+MAIN="master"
+
+# Please be sure that the package git-buildpackage is installed
+
+export DEBFULLNAME="`git config --get user.name`"
+export DEBEMAIL="`git config --get user.email`"
+
+BRANCH=`git rev-parse --abbrev-ref HEAD`
+if [ "$BRANCH" = "$MAIN" ]; then
+  VER=`dpkg-parsechangelog --show-field Version`
+  FLAVOR="`dpkg-parsechangelog --show-field Distribution`"
+  set `echo "$VER"|tr "()." "   "`
+  NPLUS=`expr 1 + "$2"`
+  NPLUS=`printf '%02d' $NPLUS`
+  if [ $? -ne 0 ]; then
+    echo "Could not parse old version \"$VER\" from changelog" >&2
+    echo "Please run this command by hand (change X.Y.Z to your version):" >&2
+    echo "gbp dch -s \"$MAIN\" -D \"$FLAVOR\" -N X.Y -c --debian-branch=\"$MAIN\" --since=\"origin/$MAIN\"" >&2
+    exit 0
+  fi
+  gbp dch -s "$MAIN" -D "$FLAVOR" -N "$1.$NPLUS" -c --debian-branch="$MAIN" --since="origin/$MAIN"
+  if [ $? -ne 0 ]; then
+    echo "Automatic update of debian/changelog failed, keeping \"$STAMP\"" >&2
+    exit 0
+  fi
+  echo "debian/changelog has been modified. Verify before \"git push\"!"
+  echo "If not satisfied, edit it, then run \"git add debian/changelog\""
+  echo "and then \"git commit --amend\", or reset the last commit."
+fi
