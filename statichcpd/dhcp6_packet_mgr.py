@@ -651,6 +651,9 @@ def construct_dhcp6_opt_list(
         )
         return tuple(opt_list)
     other_msg_opts = [ele[0] for ele in msg.opts]
+    # DHCP6_OPT_UNICAST is a special opcode that's not explicitly
+    # requested by the client, but optionally added based on config
+    other_msg_opts.append(DHCP6_OPT_UNICAST)
     for opcode in host_conf_data:
         if (
             opcode in request_list_opt or opcode in other_msg_opts
