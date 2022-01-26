@@ -3,7 +3,7 @@
 from logging import Logger, getLogger, StreamHandler, Formatter, DEBUG, INFO
 from logging.handlers import SysLogHandler
 from argparse import Namespace
-from typing import Type
+from typing import Type, Optional, Any
 from types import TracebackType
 import sys
 
@@ -27,8 +27,8 @@ def set_log_config(logconf: Namespace) -> None:
     def handle_exception(
         type_: Type[BaseException],
         value: BaseException,
-        traceback: TracebackType,
-    ) -> None:
+        traceback: Optional[TracebackType],
+    ) -> Any:
         logger.error("Uncaught exception", exc_info=(type_, value, traceback))
         sys.exit(-1)
 
