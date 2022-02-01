@@ -1,3 +1,15 @@
+statichcpd (3.01) all-bionic-stretch; urgency=medium
+
+  * Fix variable name
+  * Add post-merge script
+  * Formatting: add 'black' unit-test.
+  * Formatting: style all files using 'black'.
+  * debian: bionic lacks black dependency
+  * Support DHCPv6 unicast renewal
+  * Satisfy mypy to fix build errors
+
+ -- Reshma Sreekumar <reshma.sreekumar@ionos.com>  Tue, 01 Feb 2022 14:44:50 +0000
+
 statichcpd (3.0) all-bionic-stretch; urgency=medium
 
   * SDN-1045: Introduce grouping of ports and trigger based configuration
