@@ -19,6 +19,7 @@ from struct import pack
 import fcntl
 import time
 import struct
+from os import abort
 
 from .dhcp_packet_mgr import process_dhcp_packet
 from .dhcp6_packet_mgr import process_dhcp6_packet
@@ -35,7 +36,7 @@ any_nlmsg = TypeVar("any_nlmsg", ifinfmsg, ifaddrmsg)
 server_regexobj = None
 routing_disabled_with_udpsock = False
 routing_disabled_with_rawsock = False
-dhcp_ratelimit = 1000
+dhcp_ratelimit = 5000
 
 
 def init(config: Dict[str, Any]) -> None:
@@ -310,7 +311,11 @@ def activate_and_start_polling(
                 intf_rawsock.fileno(),
             )
             poller_obj.register(intf_rawsock.fileno(), POLLIN)
-            logger.info("Start servicing the interface %s", ifname)
+            logger.info(
+                "Start servicing the interface %s (file descriptor %d)",
+                ifname,
+                intf_rawsock.fileno(),
+            )
     except AttributeError as err:
         logger.error("Error %s registering %s for service", err, ifname)
         # Cleanup the socket binding and deativate the cache entry:
@@ -466,8 +471,10 @@ def start_server() -> None:
         try:
             nlsock.bind(groups=(rtnl.RTMGRP_LINK | rtnl.RTMGRP_IPV4_IFADDR))
         except OSError as err:
-            logger.exception("%s: Exception binding netlink socket", err)
-            raise KeyboardInterrupt
+            logger.exception(
+                "%s: Exception binding netlink socket. Server exiting.", err
+            )
+            abort()
 
         # 2. Poll on the NL socket
 
@@ -481,11 +488,10 @@ def start_server() -> None:
             v4_tx_sock.bind(("", 67))
         except OSError as err:
             logger.error(
-                "Error %s opening IPv4 UDP socket for unicast replies", err
+                "Error %s opening IPv4 UDP socket for unicast replies.", err
             )
-            if v4_tx_sock is not None:
-                v4_tx_sock.close()
-            raise KeyboardInterrupt
+            if not routing_disabled_with_rawsock:
+                abort()
 
         try:
             v6_tx_sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
@@ -494,11 +500,10 @@ def start_server() -> None:
             v6_tx_sock.bind(("", 547))
         except OSError as err:
             logger.error(
-                "Error %s opening IPv6 UDP socket for DHCPv6 replies", err
+                "Error %s opening IPv6 UDP socket for DHCPv6 replies. Server exiting.",
+                err,
             )
-            if v6_tx_sock is not None:
-                v6_tx_sock.close()
-            raise KeyboardInterrupt
+            abort()
 
         # 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
         #    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
@@ -575,21 +580,25 @@ def start_server() -> None:
                     else:
                         ifcache_entry = ifcache.fetch_ifcache_by_fd(fd)
                         if not ifcache_entry:
+                            """
+                            Possible that the server has stopped serving this interface based
+                            on a previous event. Ignore further events.
+                            """
                             logger.error(
                                 "Received packet on untracked interface file descriptor %d!",
                                 fd,
                             )
-                            raise KeyboardInterrupt
+                            continue
                         intf_sock = ifcache_entry.rawsock
                         ifname = ifcache_entry.ifname
                         if intf_sock is None:
                             logger.error(
                                 "Error finding a valid socket "
-                                "for interface %s and file descriptor %d",
+                                "for interface %s and file descriptor %d.",
                                 ifname,
                                 fd,
                             )
-                            raise KeyboardInterrupt
+                            continue
                         try:
                             msg, (
                                 ifname,
@@ -912,8 +921,8 @@ def start_server() -> None:
     except KeyboardInterrupt:
         exit()
         del ifcache
-        if v4_tx_sock:
+        if "v4_tx_sock" in locals() and v4_tx_sock:
             v4_tx_sock.close()
-        if v6_tx_sock:
+        if "v6_tx_sock" in locals() and v6_tx_sock:
             v6_tx_sock.close()
         logger.info("Server exiting..")
