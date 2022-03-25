@@ -77,9 +77,9 @@ def get_mac_address(ifname: str) -> Optional[Mac]:
 
 
 class RateLimiter:
-    def __init__(self, ts: float, tokens: float) -> None:
-        self.last_pkt_ts = ts
-        self.pkt_tokens = tokens
+    def __init__(self, ts: float, pkts: int) -> None:
+        self.first_pkt_ts = ts
+        self.pkts = pkts
 
 
 suspended: List[
@@ -433,9 +433,8 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         ifcache_entry.ip = None
 
 
-# Packet tokens will be credited to each file descriptor at the rate of
-# configured dhcp_ratelimit. Insufficient number of tokens is a sign of
-# packet burst and the interface will be suspended for one second
+# The interface will be suspended for a second if it receives more than
+# the configured 'dhcp_ratelimit' number of packets in a second.
 
 
 def ratelimit_monitor(
@@ -448,19 +447,21 @@ def ratelimit_monitor(
         return
 
     rl_entry = ratelimiter[ifcache_entry.raw_fd]
-    rl_entry.pkt_tokens += (now_t - rl_entry.last_pkt_ts) * dhcp_ratelimit
 
-    if rl_entry.pkt_tokens < 1:
-        logger.info(
-            "Ratelimit Warning: Burst of packets on %s. "
-            "Shutting down for a second",
-            ifcache_entry.ifname,
-        )
-        suspended.append((ifcache_entry.raw_fd, now_t))
-        poller_obj.unregister(ifcache_entry.raw_fd)
+    if rl_entry.pkts == dhcp_ratelimit:
+        if now_t - rl_entry.first_pkt_ts <= 1:
+            logger.info(
+                "Ratelimit Warning: Burst of packets on %s. "
+                "Shutting down for a second",
+                ifcache_entry.ifname,
+            )
+            suspended.append((ifcache_entry.raw_fd, now_t))
+            poller_obj.unregister(ifcache_entry.raw_fd)
+        else:
+            rl_entry.pkts = 1
+            rl_entry.first_pkt_ts = now_t
     else:
-        rl_entry.pkt_tokens -= 1
-    rl_entry.last_pkt_ts = now_t
+        rl_entry.pkts += 1
 
 
 def start_server() -> None:
