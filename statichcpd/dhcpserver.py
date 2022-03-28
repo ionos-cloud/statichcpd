@@ -7,18 +7,25 @@ from pyroute2.netlink.rtnl.ifinfmsg import ifinfmsg
 from pyroute2.netlink.rtnl.ifaddrmsg import ifaddrmsg
 import socket
 from logging import Logger
-from typing import Dict, List, Any, Tuple, TypeVar, Optional
+from typing import (
+    Dict,
+    List,
+    Any,
+    Tuple,
+    TypeVar,
+    Optional,
+    Set,
+    Callable,
+    Generic,
+    Union,
+)
 from ipaddress import AddressValueError, IPv6Address, IPv4Address
 from dpkt import dhcp
 import re
 from configparser import SectionProxy
-from socket import htons
 import dpkt
-from ctypes import create_string_buffer, addressof
 from struct import pack
-import fcntl
-import time
-import struct
+from time import time
 from os import abort
 
 from .dhcp_packet_mgr import process_dhcp_packet
@@ -27,16 +34,14 @@ from .database_manager import exit
 from .datatypes import *
 from .logmgr import logger
 from .dhcp6 import *
-from .utils import strtobool
-
-#  If there is a new NL msg, add the new interface to poll if it's create
-#  and remove the intf from poll if it's delete
+from .utils import *
 
 any_nlmsg = TypeVar("any_nlmsg", ifinfmsg, ifaddrmsg)
 server_regexobj = None
 routing_disabled_with_udpsock = False
 routing_disabled_with_rawsock = False
-dhcp_ratelimit = 5000
+dhcp_ratelimit = 1000
+intf_suspension_period = 1
 
 
 def init(config: Dict[str, Any]) -> None:
@@ -58,36 +63,11 @@ def init(config: Dict[str, Any]) -> None:
     dhcp_ratelimit = int(config.get("dhcp_ratelimit", 1000))
 
 
-def get_mac_address(ifname: str) -> Optional[Mac]:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        info = fcntl.ioctl(
-            s.fileno(),
-            0x8927,
-            struct.pack("256s", bytes(ifname, "utf-8")[:15]),
-        )
-        if info:
-            s.close()
-            return Mac(":".join("%02x" % b for b in info[18:24]))
-    except OSError as err:
-        logger.error("Error %s fetching hardware address of  %s.", err, ifname)
-    if s is not None:
-        s.close()
-    return None
+def name_matches(ifname: str) -> bool:
+    if server_regexobj is not None:
+        return bool(server_regexobj.search(ifname))
+    return False
 
-
-class RateLimiter:
-    def __init__(self, ts: float, tokens: float) -> None:
-        self.last_pkt_ts = ts
-        self.pkt_tokens = tokens
-
-
-suspended: List[
-    Tuple[int, float]
-] = []  # A list of tuples of the form [(fd, timestamp),]
-ratelimiter: Dict[
-    int, RateLimiter
-] = {}  # A dictionary of RateLimiter objects indexed by socket fd
 
 # An interface cache entry exists only for an interface whose state is UP
 # OR has a valid IP address configured. At any point, if the interface state
@@ -106,11 +86,11 @@ class InterfaceCacheEntry:
         self.ip: Optional[str] = None
         self.ip6 = None
         self.mac: Optional[Mac] = None
-        self.up = False
         self.idx = idx
+        self.to_be_deleted: bool = False
 
 
-class InterfaceCache(object):
+class InterfaceCache:
     def __init__(self) -> None:
         # Access using fd will be available only after the entry is active!
         self._by_fd: Dict[int, Optional[InterfaceCacheEntry]] = {}
@@ -123,10 +103,15 @@ class InterfaceCache(object):
         del self._by_fd
         del self._by_ifname
 
-    def add(self, ifname: str, idx: int) -> InterfaceCacheEntry:
-        entry = InterfaceCacheEntry(ifname, idx)
+    def add(
+        self, ifname: str, idx: int, mac: Optional[Mac]
+    ) -> InterfaceCacheEntry:
+        entry = self._by_ifname.get(ifname)
+        if not entry:
+            entry = InterfaceCacheEntry(ifname, idx)
+        entry.mac = mac
         self._by_ifname[ifname] = entry
-        logger.debug("Created a new cache entry for %s ", ifname)
+        logger.debug("Created/Updated cache entry for %s ", ifname)
         return entry
 
     def delete(self, entry: InterfaceCacheEntry) -> None:
@@ -146,13 +131,31 @@ class InterfaceCache(object):
         return self._by_ifname.get(ifname)
 
     def activate(
-        self, entry: InterfaceCacheEntry, rawsock: socket.socket
-    ) -> None:
-        if rawsock:
-            entry.rawsock = rawsock
-            entry.raw_fd = rawsock.fileno()
-            self._by_fd[entry.raw_fd] = entry
+        self, entry: InterfaceCacheEntry
+    ) -> Union[socket.socket, int]:
+        # Returns 0: No-op, -1: Failure, socket.socket: Success
+        if entry.rawsock is not None:
+            logger.debug(
+                "Interface %s is already active. Skipping..", entry.ifname
+            )
+            return 0
+
+        # Create and bind a socket
+        rawsock = add_rawsock_binding(entry.ifname)
+
+        if rawsock is None:
+            logger.error(
+                "Failed to open sockets for interface %s."
+                " Interface cache entry will be removed.",
+                entry.ifname,
+            )
+            return -1
+
+        entry.rawsock = rawsock
+        entry.raw_fd = rawsock.fileno()
+        self._by_fd[entry.raw_fd] = entry
         self._by_ifname[entry.ifname] = entry
+        return entry.rawsock
 
     def deactivate(self, entry: InterfaceCacheEntry) -> None:
         if entry.rawsock:
@@ -164,191 +167,233 @@ class InterfaceCache(object):
         entry.raw_fd = None
         self._by_ifname[entry.ifname] = entry
 
-
-ifcache = InterfaceCache()
-
-
-def is_served_intf(ifname: str) -> bool:
-    if server_regexobj is not None:
-        return bool(server_regexobj.search(ifname))
-    return False
+    def set_interface_ip(self, ifname: str, ip: Optional[str]) -> None:
+        entry = self._by_ifname.get(ifname)
+        if entry:
+            entry.ip = ip
 
 
-def get_ifidx(ifname: str) -> Optional[int]:
-    ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
-    if not ifcache_entry:
-        logger.error(
-            "Configured server interface %s is not in the tracked interface list!",
-            ifname,
-        )
-        return None
-    return ifcache_entry.idx
+class Controller(
+    Generic[any_nlmsg]
+):  # mypy suggests Generic to make any_nlmsg available
+    def __init__(self) -> None:
+        self.ifcache = InterfaceCache()
+        self.poller_obj = Poll()
+        self.ifs_to_deactivate: Set[str] = set()
+        self.nlmsgs_to_process: List[any_nlmsg] = []
 
+    # Registration with poll is only done for an interface whose state is UP
+    # AND has a valid IP address configured. At any point, if the interface state
+    # becomes down or IP is deleted, the interface will be de-registered
 
-# Filter on port 67 generated using the following command:
-# sudo tcpdump -p -i lo -dd -s 1024 'inbound and (dst port 67 or dst port 547)' | sed -e 's/{ /(/' -e 's/ }/)/'
+    def activate_and_start_polling(
+        self, ifcache_entry: InterfaceCacheEntry
+    ) -> int:
+        # Return 0 on success, -1 on failure
+        ifname = ifcache_entry.ifname
 
-dhcp_filter_list = [
-    (0x28, 0, 0, 0xFFFFF004),
-    (0x15, 20, 0, 0x00000004),
-    (0x28, 0, 0, 0x0000000C),
-    (0x15, 0, 6, 0x000086DD),
-    (0x30, 0, 0, 0x00000014),
-    (0x15, 2, 0, 0x00000084),
-    (0x15, 1, 0, 0x00000006),
-    (0x15, 0, 14, 0x00000011),
-    (0x28, 0, 0, 0x00000038),
-    (0x15, 11, 10, 0x00000043),
-    (0x15, 0, 11, 0x00000800),
-    (0x30, 0, 0, 0x00000017),
-    (0x15, 2, 0, 0x00000084),
-    (0x15, 1, 0, 0x00000006),
-    (0x15, 0, 7, 0x00000011),
-    (0x28, 0, 0, 0x00000014),
-    (0x45, 5, 0, 0x00001FFF),
-    (0xB1, 0, 0, 0x0000000E),
-    (0x48, 0, 0, 0x00000010),
-    (0x15, 1, 0, 0x00000043),
-    (0x15, 0, 1, 0x00000223),
-    (0x6, 0, 0, 0x00000400),
-    (0x6, 0, 0, 0x00000000),
-]
+        # Activate the cache entry
+        ret = self.ifcache.activate(ifcache_entry)
+        if isinstance(ret, int):
+            return ret
 
-
-def add_rawsock_binding(ifname: str) -> Optional[socket.socket]:
-    # Create a socket
-    try:
-        ETH_P_ALL = 3  # defined in linux/if_ether.h
-        intf_sock = socket.socket(
-            socket.AF_PACKET, socket.SOCK_RAW, htons(ETH_P_ALL)
-        )
-    except OSError as err:
-        logger.error(
-            "Error %s opening IPv4 RAW socket for %s. "
-            "Skipping service registration for the interface",
-            err,
-            ifname,
-        )
-        return None
-
-    # Set socket options and bind the socket
-    try:
-        intf_sock.bind((ifname, ETH_P_ALL))
-        intf_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        SO_ATTACH_FILTER = 26  # defined in linux/filter.h
-        filter_bytestring = b"".join(
-            [
-                pack("HBBI", code, jt, jf, k)
-                for code, jt, jf, k in dhcp_filter_list
-            ]
-        )
-        sock_filter_buf = create_string_buffer(filter_bytestring)
-        sock_fprog = pack(
-            "HL", len(dhcp_filter_list), addressof(sock_filter_buf)
-        )
-        intf_sock.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, sock_fprog)
-    except OSError as err:
-        logger.error(
-            "Error %s binding to / setting IPv4 RAW socket options for %s",
-            err,
-            ifname,
-        )
-        intf_sock.close()
-        return None
-
-    return intf_sock
-
-
-# Registration with poll is only done for an interface whose state is UP
-# AND has a valid IP address configured. At any point, if the interface state
-# becomes down or IP is deleted, the interface will be de-registered
-
-
-def activate_and_start_polling(
-    poller_obj: poll, ifcache_entry: InterfaceCacheEntry
-) -> None:
-    ifname = ifcache_entry.ifname
-
-    # Skip for already activated interface
-    if ifcache_entry.raw_fd is not None:
-        logger.debug("Interface %s is already active. Skipping..", ifname)
-        return
-
-    # Create and bind a socket
-    intf_rawsock = (
-        ifcache_entry.rawsock
-        if ifcache_entry.rawsock is not None
-        else add_rawsock_binding(ifname)
-    )
-
-    if intf_rawsock is None:
-        logger.error(
-            "Failed to open sockets for interface %s."
-            " Not servicing the interface.",
-            ifname,
-        )
-        return
-
-    # Activate the cache entry
-    ifcache.activate(ifcache_entry, intf_rawsock)
-
-    # Register with poller object
-    try:
-        if intf_rawsock is not None and intf_rawsock.fileno() not in [
-            fd for (fd, ts) in suspended
-        ]:
+        # Register with poller object
+        try:
             logger.debug(
-                "Registering raw socket fd: %d with poll",
-                intf_rawsock.fileno(),
+                "Registering raw socket fd: %d with poll", ret.fileno()
             )
-            poller_obj.register(intf_rawsock.fileno(), POLLIN)
+            self.poller_obj.register(ret.fileno(), POLLIN)
             logger.info(
                 "Start servicing the interface %s (file descriptor %d)",
                 ifname,
-                intf_rawsock.fileno(),
+                ret.fileno(),
             )
-    except AttributeError as err:
-        logger.error("Error %s registering %s for service", err, ifname)
-        # Cleanup the socket binding and deativate the cache entry:
-        # To re-register the intf, restart of process/reconfiguration of intf will be required!
-        # ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
-        # if ifcache_entry:
-        ifcache.deactivate(ifcache_entry)
+        except AttributeError as err:
+            logger.error("Error %s registering %s for service", err, ifname)
+            # Cleanup the socket binding and deativate the cache entry:
+            # To re-register the intf, restart of process/reconfiguration of intf will be required!
+            self.ifcache.deactivate(ifcache_entry)
+            return -1
+        return 0
 
+    def deactivate_and_stop_polling(
+        self, ifcache_entry: Optional[InterfaceCacheEntry]
+    ) -> None:
+        # Skip already deactivated entries
+        if ifcache_entry is None or ifcache_entry.raw_fd is None:
+            logger.debug(
+                "Ignoring non-registered intf: %s",
+                ifcache_entry.ifname if ifcache_entry else None,
+            )
+            return
 
-def deactivate_and_stop_polling(
-    poller_obj: poll, ifcache_entry: Optional[InterfaceCacheEntry]
-) -> None:
-
-    # Skip already deactivated entries
-    if ifcache_entry is None or ifcache_entry.raw_fd is None:
-        logger.debug(
-            "Ignoring non-registered intf: %s",
-            ifcache_entry.ifname if ifcache_entry else None,
-        )
-        return
-
-    ifname = ifcache_entry.ifname
-    try:
-        if ifcache_entry.raw_fd is not None and ifcache_entry.raw_fd not in [
-            fd for (fd, ts) in suspended
-        ]:
-            poller_obj.unregister(ifcache_entry.raw_fd)
+        try:
+            self.poller_obj.unregister(ifcache_entry.raw_fd)
             logger.info(
                 "Stop servicing interface %s (raw socket fd: %d)",
-                ifname,
+                ifcache_entry.ifname,
                 ifcache_entry.raw_fd,
             )
-    except KeyError as err:
-        logger.error("Error %s deregistering %s from service", err, ifname)
-        return
+        except KeyError as err:
+            logger.error(
+                "Error %s deregistering %s from service",
+                err,
+                ifcache_entry.ifname,
+            )
+            return
 
-    if ifcache_entry.raw_fd in ratelimiter:
-        del ratelimiter[ifcache_entry.raw_fd]
-    ifcache.deactivate(ifcache_entry)
+        self.ifcache.deactivate(ifcache_entry)
+
+    def sanitise_pollset_and_ifcache(self) -> None:
+        for ifname in self.ifs_to_deactivate:
+            ifcache_entry = self.fetch_ifcache_by_ifname(ifname)
+            if ifcache_entry:
+                self.deactivate_and_stop_polling(ifcache_entry)
+                if ifcache_entry.to_be_deleted:
+                    self.ifcache.delete(ifcache_entry)
+        for nlmsg in self.nlmsgs_to_process:
+            ifname = (
+                nlmsg.get_attr("IFLA_IFNAME")
+                if nlmsg["event"] == "RTM_NEWLINK"
+                else nlmsg.get_attr("IFA_LABEL")
+            )
+            if_index = int(nlmsg["index"])
+            mac_attr: Optional[str] = nlmsg.get_attr("IFLA_ADDRESS")
+            ifmac = None if mac_attr is None else Mac(mac_attr)
+
+            ifcache_entry = self.fetch_ifcache_by_ifname(ifname)
+            if nlmsg["event"] == "RTM_DELADDR":
+                self.ifcache.set_interface_ip(ifname, None)
+            elif nlmsg["event"] == "RTM_NEWADDR":
+                self.ifcache.set_interface_ip(
+                    ifname, nlmsg.get_attr("IFA_ADDRESS")
+                )
+            elif nlmsg["event"] == "RTM_NEWLINK":
+                ifcache_entry = self.ifcache.add(ifname, if_index, ifmac)
+                if self.activate_and_start_polling(ifcache_entry) < 0:
+                    # Possible that the interface no longer exists
+                    # Delete the entry at the cost of losing all
+                    # previous mac/IP updates
+                    self.ifcache.delete(ifcache_entry)
+        self.ifs_to_deactivate = set()
+        self.nlmsgs_to_process = []
+
+    def add_if_to_deactivate_list(
+        self, ifname: str, delete_ifcache_entry: bool = False
+    ) -> None:
+        entry = self.fetch_ifcache_by_ifname(ifname)
+        if not entry:
+            return
+        self.ifs_to_deactivate.add(ifname)
+        entry.to_be_deleted |= delete_ifcache_entry
+
+    def fetch_ifcache_by_fd(self, fd: int) -> Optional[InterfaceCacheEntry]:
+        return self.ifcache.fetch_ifcache_by_fd(fd)
+
+    def fetch_ifcache_by_ifname(
+        self, ifname: str
+    ) -> Optional[InterfaceCacheEntry]:
+        return self.ifcache.fetch_ifcache_by_ifname(ifname)
+
+    def get_ifidx(self, ifname: str) -> Optional[int]:
+        entry = self.fetch_ifcache_by_ifname(ifname)
+        if not entry:
+            logger.error(
+                "Configured server interface %s is not in the tracked interface list!",
+                ifname,
+            )
+            return None
+        return entry.idx
+
+    def empty_socket(self, fd: int) -> None:
+        entry = self.fetch_ifcache_by_fd(fd)
+        if not entry or not entry.rawsock:
+            return
+        logger.debug("Emptying socket for interface %s", entry.ifname)
+        while True:
+            try:
+                data, _ = entry.rawsock.recvfrom(1024)
+                if not data:
+                    break
+            except BlockingIOError:
+                break
 
 
-def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
+class RateLimiter:
+    def __init__(self, ts: float, pkts: int = 0) -> None:
+        self.first_pkt_ts = ts
+        self.pkts = pkts
+
+
+class Poll:
+    def __init__(self) -> None:
+        self.suspended: List[
+            Tuple[int, float]
+        ] = []  # A list of tuples of the form [(fd, timestamp),]
+        self.pollset = poll()
+        self.ratelimiter: Dict[
+            int, RateLimiter
+        ] = {}  # A dictionary of RateLimiter objects indexed by socket fd
+
+    def poll(self, *args: int) -> List[Tuple[int, int]]:
+        return self.pollset.poll(*args)
+
+    def register(self, *args: Any) -> None:
+        self.pollset.register(*args)
+
+    def unregister(self, fd: int) -> None:
+        if fd in self.ratelimiter:
+            del self.ratelimiter[fd]
+        suspended = [(sfd, ts) for (sfd, ts) in self.suspended if fd == sfd]
+        if suspended:
+            self.suspended.remove(suspended[0])
+        else:
+            self.pollset.unregister(fd)
+
+    def suspend(self, fd: int) -> None:
+        self.pollset.unregister(fd)
+        self.suspended.append((fd, time()))
+
+    def resume_suspended_fds(
+        self, now_t: float, emptyfunc: Callable[[int], None]
+    ) -> None:
+        recovered = 0
+        for fd, ts in self.suspended:
+            if now_t - ts < intf_suspension_period:
+                break
+            # Deleted/deactivated FDs are not expected to be present in
+            # the list of suspended FDs
+            emptyfunc(fd)
+            self.pollset.register(fd, POLLIN)
+            logger.info("Ratelimit Info: Restarted servicing FD %d", fd)
+            recovered += 1
+        self.suspended = self.suspended[recovered:]
+
+    def ratelimit_monitor(self, fd: Optional[int], limit: int) -> None:
+        if not fd:
+            return
+        now_t = time()
+        if fd not in self.ratelimiter:
+            self.ratelimiter[fd] = RateLimiter(now_t)
+            return
+
+        rl_entry = self.ratelimiter[fd]
+        if rl_entry.pkts == limit:
+            if now_t - rl_entry.first_pkt_ts <= intf_suspension_period:
+                logger.info(
+                    "Ratelimit Warning: %s hit maximum allowable packets in <=1 sec. "
+                    "Shutting down for a second",
+                    fd,
+                )
+                self.suspend(fd)
+            else:
+                rl_entry.pkts = 1
+                rl_entry.first_pkt_ts = now_t
+        else:
+            rl_entry.pkts += 1
+
+
+def process_nlmsg(nlmsg: any_nlmsg, ctrl: Controller[any_nlmsg]) -> None:
     nl_event = nlmsg["event"]
     if_index = int(nlmsg["index"])
     if nl_event not in [
@@ -358,104 +403,55 @@ def process_nlmsg(poller_obj: poll, nlmsg: any_nlmsg) -> None:
         "RTM_DELADDR",
     ]:
         return
-    if nl_event == "RTM_NEWLINK":
-        ifname = nlmsg.get_attr("IFLA_IFNAME")
-        state = nlmsg.get_attr("IFLA_OPERSTATE")
-        if not is_served_intf(ifname):
-            return
-        if_mac = None
-        if nlmsg.get_attr("IFLA_ADDRESS"):
-            if_mac = Mac(nlmsg.get_attr("IFLA_ADDRESS"))
-        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
-        if ifcache_entry is None:
-            ifcache_entry = ifcache.add(ifname, if_index)
-        ifcache_entry.mac = if_mac
+    ifname = (
+        nlmsg.get_attr("IFLA_IFNAME")
+        if nlmsg["event"] in ("RTM_NEWLINK", "RTM_DELLINK")
+        else nlmsg.get_attr("IFA_LABEL")
+    )
+    if not name_matches(ifname):
+        return
 
+    if nl_event == "RTM_NEWLINK":
+        state = nlmsg.get_attr("IFLA_OPERSTATE")
+        ifcache_entry = ctrl.fetch_ifcache_by_ifname(ifname)
         if state == "LOWERLAYERDOWN" or state == "DOWN":
             logger.debug("State change to DOWN for %s ", ifname)
-            # When the state is down, deactivate and stop polling
-            deactivate_and_stop_polling(poller_obj, ifcache_entry)
-            ifcache_entry.up = False
+            # When the state is down for an existing entry, add it
+            # to the list of intfs to be deactivated such that the
+            # entry is not deleted, but just deactivated
+            if ifcache_entry:
+                ctrl.add_if_to_deactivate_list(ifname, False)
             return
 
-        # If the state is up, start polling
-        logger.debug("State change to UP for %s ", ifname)
-        # Set up to True and start polling
-        ifcache_entry.up = True
-        activate_and_start_polling(poller_obj, ifcache_entry)
+        # Events that require creation/updation of cache entry
+        # should be queued irrespective of the presence of
+        # an already existing ifcache_entry, considering
+        # the possibility that it could be just an entry
+        # with pending deletion
+        ctrl.nlmsgs_to_process.append(nlmsg)
+
     elif nl_event == "RTM_DELLINK":
-        ifname = nlmsg.get_attr("IFLA_IFNAME")
-        if not is_served_intf(ifname):
-            return
         logger.debug("%s notif for %s ", nl_event, ifname)
-        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
+        ifcache_entry = ctrl.fetch_ifcache_by_ifname(ifname)
         if not ifcache_entry:
             return
         # On link delete, deactivate, stop polling and delete the cache entry
-        deactivate_and_stop_polling(poller_obj, ifcache_entry)
-        ifcache.delete(ifcache_entry)
+        ctrl.add_if_to_deactivate_list(ifname, True)
     elif nl_event == "RTM_NEWADDR":
-        ifname = nlmsg.get_attr("IFA_LABEL")
-        if not is_served_intf(ifname):
-            return
-        logger.debug("%s notif for %s ", nl_event, ifname)
-        ifaddr = nlmsg.get_attr("IFA_ADDRESS")
-        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
-        if ifcache_entry is None:
-            logger.debug(
-                "Ignoring %s for interface %s which is not in cache",
-                nl_event,
-                ifname,
-            )
-            return
-        logger.debug("%s notif for %s IP %s", nl_event, ifname, ifaddr)
-        # Set the up state to True
-        ifcache_entry.ip = ifaddr
-    else:  # Case of RTM_DELADDR
-        ifname = nlmsg.get_attr("IFA_LABEL")
-        if not is_served_intf(ifname):
-            return
-        logger.debug("%s notif for %s ", nl_event, ifname)
-        ifcache_entry = ifcache.fetch_ifcache_by_ifname(ifname)
-        # When the IP is removed, remove ip value from cache
-        if not ifcache_entry:
-            return
-
-        ifcache_entry.ip = None
-
-
-# Packet tokens will be credited to each file descriptor at the rate of
-# configured dhcp_ratelimit. Insufficient number of tokens is a sign of
-# packet burst and the interface will be suspended for one second
-
-
-def ratelimit_monitor(
-    now_t: float, ifcache_entry: InterfaceCacheEntry, poller_obj: poll
-) -> None:
-    if ifcache_entry.raw_fd is None:
-        return
-    if ifcache_entry.raw_fd not in ratelimiter:
-        ratelimiter[ifcache_entry.raw_fd] = RateLimiter(now_t, 0)
-        return
-
-    rl_entry = ratelimiter[ifcache_entry.raw_fd]
-    rl_entry.pkt_tokens += (now_t - rl_entry.last_pkt_ts) * dhcp_ratelimit
-
-    if rl_entry.pkt_tokens < 1:
-        logger.info(
-            "Ratelimit Warning: Burst of packets on %s. "
-            "Shutting down for a second",
-            ifcache_entry.ifname,
+        logger.debug(
+            "%s notif for %s IP %s",
+            nl_event,
+            ifname,
+            nlmsg.get_attr("IFA_ADDRESS"),
         )
-        suspended.append((ifcache_entry.raw_fd, now_t))
-        poller_obj.unregister(ifcache_entry.raw_fd)
-    else:
-        rl_entry.pkt_tokens -= 1
-    rl_entry.last_pkt_ts = now_t
+        ctrl.nlmsgs_to_process.append(nlmsg)
+    else:  # Case of RTM_DELADDR
+        logger.debug("%s notif for %s ", nl_event, ifname)
+        ctrl.nlmsgs_to_process.append(nlmsg)
 
 
 def start_server() -> None:
-    global ifcache, suspended
+    ctrl = Controller()
     try:
         # 1. Create an NL socket and bind
         nlsock = IPRoute()
@@ -469,8 +465,7 @@ def start_server() -> None:
 
         # 2. Poll on the NL socket
 
-        poller_obj = poll()
-        poller_obj.register(nlsock, POLLIN)
+        ctrl.poller_obj.register(nlsock, POLLIN)
         logger.debug("Registered Netlink socket for polling...")
 
         try:
@@ -497,12 +492,12 @@ def start_server() -> None:
             abort()
 
         # 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
-        #    Interfaces with IP address and UP state should be added to the poll list(to handle cases of process restart)
+        #    Interfaces in UP state should be added to the poll list(to handle cases of process restart)
 
         for intf in nlsock.get_links():
             state = intf.get_attr("IFLA_OPERSTATE")
             ifname = intf.get_attr("IFLA_IFNAME")
-            if is_served_intf(ifname):
+            if name_matches(ifname):
                 try:
                     idx = nlsock.link_lookup(ifname=ifname)[0]
                 except IndexError as err:
@@ -513,8 +508,6 @@ def start_server() -> None:
                         ifname,
                     )
                     continue
-                # Add a new intf cache entry for every served interface
-                if_entry = ifcache.add(ifname, idx)
 
                 # Check if there is an IP configured
                 interface_ip: Optional[str]
@@ -529,51 +522,34 @@ def start_server() -> None:
                 except (AddressValueError, IndexError):
                     interface_ip = None
 
-                # Update IP, MAC and Interface State in the cache
-                if_entry.up = state == "UP"
-                if_entry.ip = interface_ip
-                if_entry.mac = get_mac_address(ifname)
-
+                # Add a new intf cache entry for every served interface
+                if_entry = ctrl.ifcache.add(
+                    ifname, idx, get_mac_address(ifname)
+                )
+                ctrl.ifcache.set_interface_ip(ifname, interface_ip)
+                if state != "UP":
+                    continue
                 # If state is UP, start polling irrespective of IP address configuration
-                if if_entry.up:
-                    activate_and_start_polling(poller_obj, if_entry)
+                if ctrl.activate_and_start_polling(if_entry) < 0:
+                    ctrl.ifcache.delete(if_entry)
+
         ifcache_entry: Optional[InterfaceCacheEntry]
         # 4. Keep checking for any events on the polled FDs and process them
-        start_t = time.time()
         while True:
-            fdEvent = poller_obj.poll(1024)
-
+            fdEvent = ctrl.poller_obj.poll(1024)
             # Recover all eligible FDs that were suspended earlier
-            recovered = 0
-            now_t = time.time()
-            for fd, ts in suspended:
-                if now_t - ts > 1:
-                    # Ensure that we still have a valid cache entry for this fd
-                    # This will handle situations where the interface was deleted after being suspended
-                    ifcache_entry = ifcache.fetch_ifcache_by_fd(fd)
-                    if ifcache_entry and ifcache_entry.raw_fd is not None:
-                        poller_obj.register(ifcache_entry.raw_fd, POLLIN)
-                        logger.info(
-                            "Ratelimit Info: Restarted servicing "
-                            "interface %s",
-                            ifcache_entry.ifname,
-                        )
-                    recovered += 1
-                else:
-                    break
-            suspended = suspended[recovered:]
-
+            ctrl.poller_obj.resume_suspended_fds(time(), ctrl.empty_socket)
             for fd, event in fdEvent:
                 if event & POLLIN:  # TODO: Add code to handle other events
                     if fd == nlsock.fileno():
                         for nlmsg in nlsock.get():
-                            process_nlmsg(poller_obj, nlmsg)
+                            process_nlmsg(nlmsg, ctrl)
                     else:
-                        ifcache_entry = ifcache.fetch_ifcache_by_fd(fd)
+                        ifcache_entry = ctrl.fetch_ifcache_by_fd(fd)
                         if not ifcache_entry:
                             """
-                            Possible that the server has stopped serving this interface based
-                            on a previous event. Ignore further events.
+                            A given FD is expected to be valid for atleast a single iteration
+                            of poll events, hence ifcache_entrty shouldn't be NULL
                             """
                             logger.error(
                                 "Received packet on untracked interface file descriptor %d!",
@@ -598,8 +574,9 @@ def start_server() -> None:
                                 arphrd,
                                 rawmac,
                             ) = intf_sock.recvfrom(1024)
-                            now_t = time.time()
-                            ratelimit_monitor(now_t, ifcache_entry, poller_obj)
+                            ctrl.poller_obj.ratelimit_monitor(
+                                ifcache_entry.raw_fd, dhcp_ratelimit
+                            )
                         except OSError as err:
                             logger.error(
                                 "Error %s receiving packet on %s. "
@@ -607,10 +584,7 @@ def start_server() -> None:
                                 err,
                                 ifname,
                             )
-                            deactivate_and_stop_polling(
-                                poller_obj, ifcache_entry
-                            )
-                            ifcache.delete(ifcache_entry)
+                            ctrl.add_if_to_deactivate_list(ifname, True)
                             continue
 
                         # From the time when raw packet socket is opened until when
@@ -715,7 +689,7 @@ def start_server() -> None:
                                     # incoming server intf if client grouping is enabled
                                     if ifname != server_iface:
                                         ifcache_entry = (
-                                            ifcache.fetch_ifcache_by_ifname(
+                                            ctrl.fetch_ifcache_by_ifname(
                                                 server_iface
                                             )
                                             if server_iface
@@ -760,7 +734,7 @@ def start_server() -> None:
                                         server_if_idx = (
                                             ifcache_entry.idx
                                             if ifname == server_iface
-                                            else get_ifidx(server_iface)
+                                            else ctrl.get_ifidx(server_iface)
                                         )
                                         if server_if_idx is None:
                                             logger.error(
@@ -825,11 +799,7 @@ def start_server() -> None:
                                     err,
                                     ifname,
                                 )
-                                if ifcache_entry:
-                                    deactivate_and_stop_polling(
-                                        poller_obj, ifcache_entry
-                                    )
-                                    ifcache.delete(ifcache_entry)
+                                ctrl.add_if_to_deactivate_list(ifname, True)
                                 continue
 
                         # Case of IPv6 packet
@@ -905,15 +875,13 @@ def start_server() -> None:
                                 err,
                                 ifname,
                             )
-                            deactivate_and_stop_polling(
-                                poller_obj, ifcache_entry
-                            )
-                            ifcache.delete(ifcache_entry)
+                            ctrl.add_if_to_deactivate_list(ifname, True)
                             continue
+            ctrl.sanitise_pollset_and_ifcache()
 
     except KeyboardInterrupt:
         exit()
-        del ifcache
+        del ctrl.ifcache
         if "v4_tx_sock" in locals() and v4_tx_sock:
             v4_tx_sock.close()
         if "v6_tx_sock" in locals() and v6_tx_sock:
