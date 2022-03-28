@@ -1,3 +1,22 @@
+statichcpd (3.02) all-bionic-stretch; urgency=medium
+
+  [ Reshma Sreekumar ]
+  * Fix variable name
+  * Add post-merge script
+
+  [ Michael Dickensheets ]
+  * Formatting: add 'black' unit-test.
+  * Formatting: style all files using 'black'.
+  * debian: bionic lacks black dependency
+
+  [ Reshma Sreekumar ]
+  * Support DHCPv6 unicast renewal
+  * Satisfy mypy to fix build errors
+  * Update changelog 3.01
+  * SDN-1249: Restart statichcpd upon failure
+
+ -- Reshma Sreekumar <reshma.sreekumar@ionos.com>  Mon, 28 Mar 2022 11:15:02 +0000
+
 statichcpd (3.01) all-bionic-stretch; urgency=medium
 
   * Fix variable name
