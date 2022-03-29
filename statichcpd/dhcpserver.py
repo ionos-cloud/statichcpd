@@ -233,9 +233,7 @@ def add_rawsock_binding(ifname: str) -> Optional[socket.socket]:
 
     # Set socket options and bind the socket
     try:
-        intf_sock.setsockopt(
-            socket.SOL_SOCKET, socket.SO_BINDTODEVICE, ifname.encode()
-        )
+        intf_sock.bind((ifname, ETH_P_ALL))
         intf_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         SO_ATTACH_FILTER = 26  # defined in linux/filter.h
         filter_bytestring = b"".join(
@@ -251,18 +249,11 @@ def add_rawsock_binding(ifname: str) -> Optional[socket.socket]:
         intf_sock.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, sock_fprog)
     except OSError as err:
         logger.error(
-            "Error %s setting IPv4 RAW socket options for %s", err, ifname
+            "Error %s binding to / setting IPv4 RAW socket options for %s",
+            err,
+            ifname,
         )
         intf_sock.close()
-        return None
-
-    try:
-        intf_sock.bind((ifname, ETH_P_ALL))
-    except OSError as err:
-        logger.error(
-            "Error %s binding the IPv4 RAW socket for %s", err, ifname
-        )
-        intf_sock.close()  # No entry is added to internal datastructs at this point and not registered with poll
         return None
 
     return intf_sock
@@ -622,12 +613,14 @@ def start_server() -> None:
                             ifcache.delete(ifcache_entry)
                             continue
 
-                        # This is a strange case where ifname in sock.recvfrom doesn't match
-                        # our interface name!
+                        # From the time when raw packet socket is opened until when
+                        # it is bound to the interface, packets to other interfaces
+                        # are possibly queued in this socket queue. Ignore such
+                        # packets.
                         if ifname != ifcache_entry.ifname:
                             logger.error(
-                                "Error receving packet: Socket for %s returned data"
-                                " with interface name as %s!",
+                                "Ignoring irrelevant packet: Socket on %s received data"
+                                " with interface name as %s",
                                 ifcache_entry.ifname,
                                 ifname,
                             )
