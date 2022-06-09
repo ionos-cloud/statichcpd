@@ -5,6 +5,15 @@ from pyroute2 import IPRoute
 from pyroute2.netlink import rtnl
 from pyroute2.netlink.rtnl.ifinfmsg import ifinfmsg
 from pyroute2.netlink.rtnl.ifaddrmsg import ifaddrmsg
+
+try:
+    from pyroute2.netlink.exceptions import NetlinkDumpInterrupted
+except ImportError:
+
+    class NetlinkDumpInterrupted(Exception):  # type: ignore
+        """Dummy exception definition for older versions of pyroute."""
+
+
 import socket
 from logging import Logger
 from typing import (
@@ -67,6 +76,32 @@ def name_matches(ifname: str) -> bool:
     if server_regexobj is not None:
         return bool(server_regexobj.search(ifname))
     return False
+
+
+def retry_interrupted(
+    func: Callable[..., List[Any]], *args: Any, **kwargs: Any
+) -> List[Any]:
+    """
+    Retry `func` with `args`, `kwargs` until NetlinkDumpInterrupted
+    does not happen.  Assume that the generator returns a list!
+    """
+    tries = 0
+    while True:
+        tries += 1
+        try:
+            result = list(func(*args, **kwargs))
+            break
+        except NetlinkDumpInterrupted:
+            continue
+    if tries > 1:
+        logger.warning(
+            "%s %s %s got NetlinkDumpInterrupted, succeeded after %d tries",
+            func,
+            args,
+            kwargs,
+            tries,
+        )
+    return result
 
 
 # An interface cache entry exists only for an interface whose state is UP
@@ -494,12 +529,14 @@ def start_server() -> None:
         # 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
         #    Interfaces in UP state should be added to the poll list(to handle cases of process restart)
 
-        for intf in nlsock.get_links():
+        for intf in retry_interrupted(nlsock.get_links):
             state = intf.get_attr("IFLA_OPERSTATE")
             ifname = intf.get_attr("IFLA_IFNAME")
             if name_matches(ifname):
                 try:
-                    idx = nlsock.link_lookup(ifname=ifname)[0]
+                    idx = retry_interrupted(nlsock.link_lookup, ifname=ifname)[
+                        0
+                    ]
                 except IndexError as err:
                     logger.error(
                         "Error %s fetching interface index "
@@ -514,9 +551,9 @@ def start_server() -> None:
                 try:
                     interface_ip = str(
                         IPv4Address(
-                            nlsock.get_addr(index=idx)[0].get_attr(
-                                "IFA_ADDRESS"
-                            )
+                            retry_interrupted(nlsock.get_addr, index=idx)[
+                                0
+                            ].get_attr("IFA_ADDRESS")
                         )
                     )
                 except (AddressValueError, IndexError):
