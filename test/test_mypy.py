@@ -21,7 +21,7 @@ class TypeCheckTest(TestCase):
         self.pypath = self.mypy_env.get("PYTHONPATH", getcwd())  # type: str
         self.mypy_opts = ["--strict"]
 
-    @skipUnless(mypy_version >= 0.67, "Do not trust earlier mypy versions")
+    @skipUnless(mypy_version > 0.67, "Do not trust earlier mypy versions")
     def test_run_mypy(self):
         mypy_call = (
             ["mypy"] + self.mypy_opts + ["-p", self.pkgname]
