@@ -21,7 +21,12 @@ class TypeCheckTest(TestCase):
         self.pypath = self.mypy_env.get("PYTHONPATH", getcwd())  # type: str
         self.mypy_opts = ["--strict"]
 
-    @skipUnless(mypy_version > 0.67, "Do not trust earlier mypy versions")
+    # Skip mypy tests specifically for 0.971 version due to the following bug:
+    # https://github.com/python/mypy/issues/7604#issuecomment-1249824784
+    @skipUnless(
+        mypy_version > 0.67 and mypy_version != 0.971,
+        "Do not trust mypy versions < 0.67 and version == 0.971",
+    )
     def test_run_mypy(self):
         mypy_call = (
             ["mypy"] + self.mypy_opts + ["-p", self.pkgname]
