@@ -33,10 +33,10 @@ def init(config: Dict[str, Any]) -> None:
     global default_t1, default_t2, default_pref_lifetime, default_valid_lifetime
     use_mac_as_duid = strtobool(config.get("use_mac_as_client_duid", "False"))
     disable_ia_id = strtobool(config.get("disable_ia_id", "False"))
-    default_t1 = int(config.get("default_renew_time", 1000))
-    default_t2 = int(config.get("default_rebind_time", 2000))
-    default_pref_lifetime = int(config.get("default_pref_lifetime", 3000))
-    default_valid_lifetime = int(config.get("default_valid_lifetime", 4000))
+    default_t1 = int(config.get("default_renew_time", 0))
+    default_t2 = int(config.get("default_rebind_time", 0))
+    default_pref_lifetime = int(config.get("default_pref_lifetime", 187))
+    default_valid_lifetime = int(config.get("default_valid_lifetime", 300))
 
 
 # Message Validation: RFC 3315 Section 15
