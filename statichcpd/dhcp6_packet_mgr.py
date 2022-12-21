@@ -1143,7 +1143,7 @@ def process_dhcp6_packet(
     ifname: str, dhcp6_msg: Message, server_mac: Mac, src_mac: Mac
 ) -> Tuple[Optional[bytes], bool, Optional[str]]:
     payload = dhcp6_msg.data
-    server_duid = struct.pack(">HH", 3, 1) + binascii.unhexlify(
+    server_duid = struct.pack(">HH", 1, 1, 0x2b33, 0x3a4b) + binascii.unhexlify(
         (str(server_mac)).replace(":", "")
     )
     direct_unicast_from_client = False
