@@ -259,7 +259,6 @@ class Message(dpkt.Packet):
             l = []
             for t, data in self.opts:
                 l.append(struct.pack(">HH%is" % len(data), t, len(data), data))
-            l.append(b"\xff")
             return b"".join(l)
 
         def unpack(self, buf: bytes) -> None:
@@ -334,7 +333,6 @@ class Message(dpkt.Packet):
             l = []
             for t, data in self.opts:
                 l.append(struct.pack(">HH%is" % len(data), t, len(data), data))
-            l.append(b"\xff")
             return b"".join(l)
 
         def unpack(self, buf: bytes) -> None:
