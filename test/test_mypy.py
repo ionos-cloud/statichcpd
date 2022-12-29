@@ -17,7 +17,7 @@ class TypeCheckTest(TestCase):
         self.pkgname = "statichcpd"
         super(TypeCheckTest, self).__init__(*args, **kwargs)
         self.mypy_env = environ.copy()
-        self.mypy_env.update({"MYPYPATH": join(getcwd(), "mypystubs")})
+        self.mypy_env.update({"MYPYPATH": join("statichcpd", "mypystubs")})
         self.pypath = self.mypy_env.get("PYTHONPATH", getcwd())  # type: str
         self.mypy_opts = ["--strict"]
 
