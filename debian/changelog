@@ -1,3 +1,15 @@
+statichcpd (3.05) stable; urgency=medium
+
+  [ Reshma Sreekumar ]
+  * Skip mypy tests on bookworm
+
+  [ Eugene Crosser ]
+  * test/mypy: make it work with newer mypy versions
+  * reformat and update tests to suit modern distros
+  * Add debian/gitlab-ci.yml to build on ubuntu too
+
+ -- Eugene Crosser <evgenii.cherkashin@ionos.com>  Fri, 19 May 2023 17:46:02 +0200
+
 statichcpd (3.04) stable; urgency=medium
 
   [ Mikhail Sennikovsky ]
