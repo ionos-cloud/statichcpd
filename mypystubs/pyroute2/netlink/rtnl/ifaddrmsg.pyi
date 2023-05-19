@@ -5,5 +5,4 @@ class _attr(object):
         self.value: str
 
 class ifaddrmsg(Dict[str, str]):
-    def get_attr(self, attr: str) -> str:
-        ...
+    def get_attr(self, attr: str) -> str: ...

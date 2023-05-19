@@ -405,7 +405,7 @@ def fetch_host_conf_data(
         return result, None
     cursor = dhcp_db_conn.cursor()
     client_if = None
-    for (opcode, max_count, datatype, value, iface) in cursor.execute(
+    for opcode, max_count, datatype, value, iface in cursor.execute(
         db_obj.select_command, {"client_id": str(client_id), "ifname": ifname}
     ):
         if client_if and client_if != iface:

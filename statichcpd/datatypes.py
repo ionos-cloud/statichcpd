@@ -43,7 +43,9 @@ class Staticrt:
 
     def __bytes__(
         self,
-    ) -> bytes:  # Returns a byte string in accordance with RFC 3442 DHCP Option 121
+    ) -> (
+        bytes
+    ):  # Returns a byte string in accordance with RFC 3442 DHCP Option 121
         network, gateway = self.value
         significant_netoctets = (network.prefixlen - 1) // 8 + 1
         subnet_width = bytes([network.prefixlen])

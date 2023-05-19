@@ -20,8 +20,7 @@ class TestStatichcpdMethods(unittest.TestCase):
             with server_process(cfg) as srv:
                 sleep(1)  # Don't rush! Let the server get ready!
 
-                for (client, server) in zip(cfg.clients, cfg.servers):
-
+                for client, server in zip(cfg.clients, cfg.servers):
                     # DHCPv4 Selecting-Init state
                     with dhcp_sender("-v " + client.name) as sender:
                         sleep(

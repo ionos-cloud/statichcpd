@@ -14,7 +14,6 @@ from . import dhcp_packet_mgr
 from . import dhcp6_packet_mgr
 
 if __name__ == "__main__":
-
     config_file = "/etc/statichcpd/statichcpd.conf"  # Default config file path
     addn_config_dir = None
 
