@@ -3,8 +3,9 @@
 from abc import ABC
 from ipaddress import IPv4Network, IPv4Address
 from .logmgr import logger
-from typing import Union
+from typing import Union, Optional
 from dpkt.compat import compat_ord
+from dataclasses import dataclass
 import binascii
 
 
@@ -80,3 +81,24 @@ class Mac:
 
     def __bytes__(self) -> bytes:
         return self.val
+
+
+@dataclass
+class DHCPResponse:
+    data: bytes
+    daddr: Optional[IPv4Address]
+    server_id: IPv4Address
+    server_iface: str
+
+
+@dataclass
+class DHCPError:
+    error: str
+    ifname: str
+    client: Optional[Union[Mac, str]]
+
+
+@dataclass
+class DHCP6Response:
+    data: bytes
+    server_iface: Optional[str]

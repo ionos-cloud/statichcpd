@@ -691,12 +691,7 @@ def start_server() -> None:
                                 src_mac,
                             )
 
-                            (
-                                dhcp_frame,
-                                gw_address,
-                                server_id,
-                                server_iface,
-                            ) = process_dhcp_packet(
+                            dhcp_response, gw_address = process_dhcp_packet(
                                 ifname,
                                 server_ip,
                                 src_mac,
@@ -704,10 +699,12 @@ def start_server() -> None:
                                 ifcache_entry.mac,
                                 routing_disabled_with_rawsock,
                             )
-                            if dhcp_frame is None:
-                                logger.error(
-                                    "No DHCP response sent for packet on %s",
-                                    ifname,
+                            if isinstance(dhcp_response, DHCPError):
+                                logger.info(
+                                    "No DHCP response sent on %s: Client: %s Error %s",
+                                    dhcp_response.ifname,
+                                    dhcp_response.client,
+                                    dhcp_response.error,
                                 )
                                 continue
                             try:
@@ -719,38 +716,40 @@ def start_server() -> None:
                                 # So, raw socket is used if routing_disabled_with_rawsock = True
                                 # or if both ciaddr and giaddr are zero
 
-                                # If gw_address is None, 'dhcp_frame' is a complete ethernet frame
-                                # Else, 'dhcp_frame' is just dhcp hdr payload
+                                # If gw_address is None, 'dhcp_response.data' is a complete ethernet frame
+                                # Else, 'dhcp_response.data' is just dhcp hdr payload
                                 if gw_address is None:
                                     # The outgoing server intf could be different from
                                     # incoming server intf if client grouping is enabled
-                                    if ifname != server_iface:
+                                    if ifname != dhcp_response.server_iface:
                                         ifcache_entry = (
                                             ctrl.fetch_ifcache_by_ifname(
-                                                server_iface
+                                                dhcp_response.server_iface
                                             )
-                                            if server_iface
+                                            if dhcp_response.server_iface
                                             else None
                                         )
                                         if not ifcache_entry:
                                             logger.error(
                                                 "No server info found for server interface %s",
-                                                server_iface,
+                                                dhcp_response.server_iface,
                                             )
                                             continue
                                     if not ifcache_entry.rawsock:
                                         logger.error(
                                             "No socket info found for server interface %s",
-                                            server_iface,
+                                            dhcp_response.server_iface,
                                         )
                                         continue
                                     logger.debug(
                                         "Unicasting DHCP reply over RAW socket: "
                                         "Request Src Mac:%s Server Intf: %s",
                                         src_mac,
-                                        server_iface,
+                                        dhcp_response.server_iface,
                                     )
-                                    ifcache_entry.rawsock.send(dhcp_frame)
+                                    ifcache_entry.rawsock.send(
+                                        dhcp_response.data
+                                    )
                                     continue
                                 else:
                                     destination_ip, port = gw_address
@@ -760,7 +759,7 @@ def start_server() -> None:
                                     if routing_disabled_with_udpsock:
                                         # Non-zero intf idx and Non-default source IP used unlike
                                         # how the ip(7) linux documentation for IP_PKTINFO suggests
-                                        if server_iface is None:
+                                        if dhcp_response.server_iface is None:
                                             logger.error(
                                                 "Routing disabled: No valid server interface configured "
                                                 "for client %s received on interface %s. No response sent",
@@ -770,14 +769,17 @@ def start_server() -> None:
                                             continue
                                         server_if_idx = (
                                             ifcache_entry.idx
-                                            if ifname == server_iface
-                                            else ctrl.get_ifidx(server_iface)
+                                            if ifname
+                                            == dhcp_response.server_iface
+                                            else ctrl.get_ifidx(
+                                                dhcp_response.server_iface
+                                            )
                                         )
                                         if server_if_idx is None:
                                             logger.error(
                                                 "Routing disabled: Failed to fetch if index for %s "
                                                 "No response sent for client %s for pkt on interface %s.",
-                                                server_iface,
+                                                dhcp_response.server_iface,
                                                 src_mac,
                                                 ifname,
                                             )
@@ -786,12 +788,14 @@ def start_server() -> None:
                                         logger.debug(
                                             "Routing disabled: Unicast reply to %s through interface %s",
                                             gw_address,
-                                            server_iface,
+                                            dhcp_response.server_iface,
                                         )
                                         pktinfo = pack(
                                             "=I4s4s",
                                             server_if_idx,
-                                            socket.inet_aton(str(server_id)),
+                                            socket.inet_aton(
+                                                str(dhcp_response.server_id)
+                                            ),
                                             socket.inet_aton(
                                                 str(destination_ip)
                                             ),
@@ -804,7 +808,9 @@ def start_server() -> None:
                                         pktinfo = pack(
                                             "=I4s4s",
                                             0,
-                                            socket.inet_aton(str(server_id)),
+                                            socket.inet_aton(
+                                                str(dhcp_response.server_id)
+                                            ),
                                             socket.inet_aton(
                                                 str(destination_ip)
                                             ),
@@ -813,11 +819,11 @@ def start_server() -> None:
                                         "Unicasting DHCP reply over UDP socket: "
                                         "Dst IP:%s Src IP:%s Request Src Mac: %s",
                                         destination_ip,
-                                        server_id,
+                                        dhcp_response.server_id,
                                         src_mac,
                                     )
                                     v4_tx_sock.sendmsg(
-                                        [dhcp_frame],
+                                        [dhcp_response.data],
                                         [
                                             (
                                                 socket.IPPROTO_IP,
@@ -862,17 +868,24 @@ def start_server() -> None:
                                 )
 
                                 (
-                                    pkt,
+                                    dhcp6_response,
                                     direct_unicast_from_client,
-                                    _,
                                 ) = process_dhcp6_packet(
                                     ifname,
                                     dhcp6_msg,
                                     ifcache_entry.mac,
                                     Mac(rawmac),
                                 )
-                                if pkt is None:
-                                    logger.error(
+                                if isinstance(dhcp6_response, DHCPError):
+                                    logger.info(
+                                        "No DHCP6 response sent on %s. Client: %s Error: %s",
+                                        dhcp6_response.ifname,
+                                        dhcp6_response.client,
+                                        dhcp6_response.error,
+                                    )
+                                    continue
+                                if dhcp6_response.data is None:
+                                    logger.info(
                                         "No DHCP6 response sent for packet on %s from %s",
                                         ifname,
                                         Mac(rawmac),
@@ -890,7 +903,7 @@ def start_server() -> None:
                                     )
                                     SOL_IP6_PKTINFO = 50
                                     v6_tx_sock.sendmsg(
-                                        [pkt],
+                                        [dhcp6_response.data],
                                         [
                                             (
                                                 socket.IPPROTO_IPV6,
@@ -903,7 +916,8 @@ def start_server() -> None:
                                     )
                                 else:
                                     v6_tx_sock.sendto(
-                                        pkt, (destination_ip6, udp.sport)
+                                        dhcp6_response.data,
+                                        (destination_ip6, udp.sport),
                                     )
                         except OSError as err:
                             logger.error(
