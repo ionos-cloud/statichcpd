@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 
 import sqlite3
-from dpkt import dhcp
-from typing import Tuple, List, Any, Dict, Optional, Union
+from typing import Tuple, Any, Dict, Optional, Union
 from time import sleep
-import os
-from ipaddress import IPv4Address
 from enum import Enum
-from configparser import SectionProxy
 import csv
-from ipaddress import IPv6Address, IPv6Network
+from ipaddress import IPv4Address, IPv6Address, IPv6Network
+from dpkt import dhcp
 
-from .datatypes import *
+from .datatypes import Int16, Int32, Mac, Staticrt
 from .logmgr import logger
-from .dhcp6 import *
+
 
 __all__ = [
     "schema",
@@ -26,11 +23,28 @@ __all__ = [
     "dtype",
     "DHCPv4DB",
     "DHCPv6DB",
-    "exit",
+    "db_exit",
     "fetch_host_conf_data",
 ]
 
-dhcp_db_conn = None
+
+class DatabaseManager:
+    def __init__(self, name: str = ""):
+        self.name = name
+        self.conn: Optional[sqlite3.Connection] = None
+
+    def connect(self) -> None:
+        if logger:
+            logger.debug("Connecting to %s", self.name)
+        assert self.name
+        self.conn = sqlite3.connect(self.name)
+
+    def close(self) -> None:
+        if self.conn:
+            self.conn.close()
+
+
+dhcp_db = DatabaseManager()
 
 """
 In a scenario where the controller has not adapted to the new feature of
@@ -70,7 +84,8 @@ schema = [
            ifname text not null,
            groupID text,
            mac text not null,
-           foreign key (ifname, groupID) references client_groups(ifname, groupID) on delete cascade,
+           foreign key (ifname, groupID) references
+           client_groups(ifname, groupID) on delete cascade,
            constraint compkey_mac_grp_if unique(ifname, groupID, mac));""",
     """create table if not exists client_configuration (
            ifname text not null,
@@ -78,80 +93,128 @@ schema = [
            mac text not null,
            attr_code int not null,
            attr_val not null,
-           constraint compkey_mac_if_attr unique(ifname, groupID, mac, attr_code, attr_val)
-           foreign key (ifname, groupID, mac) references clients(ifname, groupID, mac) on delete cascade,
-           foreign key (ifname, groupID) references client_groups(ifname, groupID) on delete cascade,
-           foreign key (attr_code) references valid_attributes(opcode) on delete restrict);""",
+           constraint compkey_mac_if_attr
+           unique(ifname, groupID, mac, attr_code, attr_val)
+           foreign key (ifname, groupID, mac) references
+           clients(ifname, groupID, mac) on delete cascade,
+           foreign key (ifname, groupID) references
+           client_groups(ifname, groupID) on delete cascade,
+           foreign key (attr_code) references
+           valid_attributes(opcode) on delete restrict);""",
     """create table if not exists client_v6configuration (
            ifname text not null,
            groupID text,
            duid text not null,
            attr_code int not null,
            attr_val not null,
-           constraint compkey_clientid_if_attr unique(ifname, groupID, duid, attr_code, attr_val)
-           foreign key (ifname, groupID, duid) references clients(ifname, groupID, mac) on delete cascade,
-           foreign key (ifname, groupID) references client_groups(ifname, groupID) on delete cascade,
-           foreign key (attr_code) references valid_v6attributes(opcode) on delete restrict);""",
+           constraint compkey_clientid_if_attr
+           unique(ifname, groupID, duid, attr_code, attr_val)
+           foreign key (ifname, groupID, duid) references
+           clients(ifname, groupID, mac) on delete cascade,
+           foreign key (ifname, groupID) references
+           client_groups(ifname, groupID) on delete cascade,
+           foreign key (attr_code) references
+           valid_v6attributes(opcode) on delete restrict);""",
     """create trigger if not exists client_insertion before insert on clients
            begin
-           insert into client_groups (ifname, groupID) select new.ifname, new.groupID where not exists(
-           select 1 from client_groups where ifname=new.ifname and (groupID=new.groupID or groupID is new.groupID));
+           insert into client_groups (ifname, groupID)
+           select new.ifname, new.groupID where not exists(
+           select 1 from client_groups where ifname=new.ifname and
+           (groupID=new.groupID or groupID is new.groupID));
            end;""",
     """create trigger if not exists client_deletion after delete on clients
-           when (select count(*) from clients where ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID)) == 0
+           when (select count(*) from clients where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID)) == 0
            begin
-           delete from client_groups where ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID);
+           delete from client_groups where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID);
            end;""",
     """create trigger if not exists client_del_config_cleanup before delete on clients
-           when exists(select 1 from clients where ifname=old.ifname and groupID is old.groupID and old.groupID is NULL)
+           when exists(select 1 from clients where ifname=old.ifname and
+           groupID is old.groupID and old.groupID is NULL)
            begin
-           delete from client_configuration where ifname=old.ifname and mac=old.mac and groupID is NULL;
-           delete from client_v6configuration where ifname=old.ifname and duid=old.mac and groupID is NULL;
+           delete from client_configuration where
+           ifname=old.ifname and mac=old.mac and groupID is NULL;
+           delete from client_v6configuration where
+           ifname=old.ifname and duid=old.mac and groupID is NULL;
            end;""",
-    """create trigger if not exists client_v4_cfg_insertion before insert on client_configuration
-           when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) == 0
+    """create trigger if not exists client_v4_cfg_insertion before
+           insert on client_configuration
+           when (select count(*) from client_groups where
+           ifname=new.ifname and groupID is NULL) == 0
            begin
-           insert into client_groups (ifname, groupID) select new.ifname, new.groupID where not exists(
-           select 1 from client_groups where ifname=new.ifname and groupID=new.groupID);
-           insert into clients (ifname, groupID, mac) select new.ifname, new.groupID, new.mac where not exists(
-           select 1 from clients where ifname=new.ifname and groupID=new.groupID and mac=new.mac);
+           insert into client_groups (ifname, groupID) select
+           new.ifname, new.groupID where not exists(
+           select 1 from client_groups where
+           ifname=new.ifname and groupID=new.groupID);
+           insert into clients (ifname, groupID, mac) select
+           new.ifname, new.groupID, new.mac where not exists(
+           select 1 from clients where
+           ifname=new.ifname and groupID=new.groupID and mac=new.mac);
            end;""",
-    """create trigger if not exists client_v4_cfg_replace before insert on client_configuration
-           when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) > 0 and new.groupID is not NULL
+    """create trigger if not exists client_v4_cfg_replace before
+           insert on client_configuration
+           when (select count(*) from client_groups where
+           ifname=new.ifname and groupID is NULL) > 0 and
+           new.groupID is not NULL
            begin
-           replace into client_groups (ifname, groupID) values (new.ifname, new.groupID);
-           replace into clients (ifname, groupID, mac) values (new.ifname, new.groupID, new.mac);
+           replace into client_groups (ifname, groupID)
+           values (new.ifname, new.groupID);
+           replace into clients (ifname, groupID, mac)
+           values (new.ifname, new.groupID, new.mac);
            end;""",
-    """create trigger if not exists client_v6_cfg_insertion before insert on client_v6configuration
-           when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) == 0
+    """create trigger if not exists client_v6_cfg_insertion before
+           insert on client_v6configuration
+           when (select count(*) from client_groups where
+           ifname=new.ifname and groupID is NULL) == 0
            begin
-           insert into client_groups (ifname, groupID) select new.ifname, new.groupID where not exists(
-           select 1 from client_groups where ifname=new.ifname and groupID=new.groupID);
-           insert into clients (ifname, groupID, mac) select new.ifname, new.groupID, new.duid where not exists(
-           select 1 from clients where ifname=new.ifname and groupID=new.groupID and mac=new.duid);
+           insert into client_groups (ifname, groupID)
+           select new.ifname, new.groupID where not exists(
+           select 1 from client_groups where
+           ifname=new.ifname and groupID=new.groupID);
+           insert into clients (ifname, groupID, mac)
+           select new.ifname, new.groupID, new.duid where not exists(
+           select 1 from clients where
+           ifname=new.ifname and groupID=new.groupID and mac=new.duid);
            end;""",
-    """create trigger if not exists client_v6_cfg_replace before insert on client_v6configuration
-           when (select count(*) from client_groups where ifname=new.ifname and groupID is NULL) > 0 and new.groupID is not NULL
+    """create trigger if not exists client_v6_cfg_replace before
+           insert on client_v6configuration
+           when (select count(*) from client_groups where
+           ifname=new.ifname and groupID is NULL) > 0 and new.groupID is not NULL
            begin
-           replace into client_groups (ifname, groupID) values (new.ifname, new.groupID);
-           replace into clients (ifname, groupID, mac) values (new.ifname, new.groupID, new.duid);
+           replace into client_groups (ifname, groupID)
+           values (new.ifname, new.groupID);
+           replace into clients (ifname, groupID, mac)
+           values (new.ifname, new.groupID, new.duid);
            end;""",
-    """create trigger if not exists client_v4_cfg_deletion after delete on client_configuration
-           when (select count(*) from client_configuration where ifname=old.ifname and mac=old.mac) == 0
-           and (select count(*) from client_v6configuration where ifname=old.ifname and duid=old.mac) == 0
+    """create trigger if not exists client_v4_cfg_deletion after
+           delete on client_configuration
+           when (select count(*) from client_configuration where
+           ifname=old.ifname and mac=old.mac) == 0
+           and (select count(*) from client_v6configuration where
+           ifname=old.ifname and duid=old.mac) == 0
            begin
-           delete from clients where ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID) and mac=old.mac;
-           delete from client_groups where ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID)
-           and not exists(select 1 from clients where ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID)
+           delete from clients where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID) and mac=old.mac;
+           delete from client_groups where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID)
+           and not exists(select 1 from clients where
+           ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID)
            and mac<>old.mac);
            end;""",
-    """create trigger if not exists client_v6_cfg_deletion after delete on client_v6configuration
-           when (select count(*) from client_v6configuration where ifname=old.ifname and duid=old.duid) == 0
-           and (select count(*) from client_configuration where ifname=old.ifname and mac=old.duid) == 0
+    """create trigger if not exists client_v6_cfg_deletion after
+           delete on client_v6configuration
+           when (select count(*) from client_v6configuration where
+           ifname=old.ifname and duid=old.duid) == 0
+           and (select count(*) from client_configuration where
+           ifname=old.ifname and mac=old.duid) == 0
            begin
-           delete from clients where ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID) and mac=old.duid;
-           delete from client_groups where ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID)
-           and not exists(select 1 from clients where ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID)
+           delete from clients where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID) and mac=old.duid;
+           delete from client_groups where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID)
+           and not exists(select 1 from clients where
+           ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID)
            and mac<>old.duid);
            end;""",
 ]
@@ -178,16 +241,15 @@ class dtype(Enum):
     PD = 8
 
 
-"""
-In a scenario where the controller has not adapted to the new feature of
-'port grouping' or if we have non-empty database left from previously running
-version, the database will have NULL values in the groupID field. In such a
-case, fallback to the lookup that matches <ifname and mac>, without considering
-interface grouping.
-"""
+class DHCPv4DB:
+    """
+    In a scenario where the controller has not adapted to the new feature of
+    'port grouping' or if we have non-empty database left from previously running
+    version, the database will have NULL values in the groupID field. In such a
+    case, fallback to the lookup that matches <ifname and mac>, without considering
+    interface grouping.
+    """
 
-
-class DHCPv4DB(object):
     select_command = """ select valid_attributes.opcode, valid_attributes.max_count,
                          valid_attributes.datatype, client_configuration.attr_val,
                          client_configuration.ifname
@@ -204,7 +266,7 @@ class DHCPv4DB(object):
                          end;"""
 
 
-class DHCPv6DB(object):
+class DHCPv6DB:
     select_command = """ select valid_v6attributes.opcode, valid_v6attributes.max_count,
                          valid_v6attributes.datatype, client_v6configuration.attr_val,
                          client_v6configuration.ifname
@@ -228,98 +290,104 @@ alter_table_cmd = [
 ]
 
 migrate_cfgs_cmd = [
-    """insert into clients (ifname, groupID, mac) 
-                       select distinct ifname, groupID, mac from client_configuration where not exists(
+    """insert into clients (ifname, groupID, mac)
+                       select distinct ifname, groupID, mac from
+                       client_configuration where not exists(
                        select 1 from clients where ifname=ifname and mac=mac
                        and (groupID=groupID or groupID is groupID));""",
     """insert into client_groups (ifname, groupID)
-                       select distinct ifname, groupID from client_configuration where not exists(
+                       select distinct ifname, groupID from
+                       client_configuration where not exists(
                        select 1 from client_groups where ifname=ifname and
                        (groupID=groupID or groupID is groupID));""",
     """insert into clients (ifname, groupID, mac)
-                       select distinct ifname, groupID, duid from client_v6configuration where not exists(
+                       select distinct ifname, groupID, duid from
+                       client_v6configuration where not exists(
                        select 1 from clients where ifname=ifname and mac=duid
                        and (groupID=groupID or groupID is groupID));""",
     """insert into client_groups (ifname, groupID)
-                       select distinct ifname, groupID from client_v6configuration where not exists(
+                       select distinct ifname, groupID from
+                       client_v6configuration where not exists(
                        select 1 from client_groups where ifname=ifname and
                        (groupID=groupID or groupID is groupID));""",
 ]
 
 
 def populate_table_from(table_name: str, csv_filename: str) -> None:
-    if dhcp_db_conn is None:
+    if dhcp_db.conn is None:
         return
-    cursor = dhcp_db_conn.cursor()
-    with open(csv_filename, "r") as f:
+    cursor = dhcp_db.conn.cursor()
+    with open(csv_filename, "r", encoding="utf-8") as f:
         reader = csv.reader(f)
         columns = next(reader)
-        query = "insert or replace into {0}({1}) values ({2})".format(
-            table_name, ",".join(columns), ",".join("?" * len(columns))
+        query = (
+            f"insert or replace into {table_name}("
+            f"{','.join(columns)}) values ("
+            f"{','.join('?' * len(columns))})"
         )
+
         for row in reader:
             # Opcode can be an integer or dpkt.dhcp module optcode alias
+            optype = getattr(dtype, row[2], None)
+            if optype is None:
+                continue
             try:
                 if hasattr(dhcp, row[0]):
                     data = (
                         str(getattr(dhcp, row[0])),
                         row[1],
-                        str(eval("dtype." + row[2] + ".value")),
+                        str(optype.value),
                     )
                 else:
                     data = (
                         str(globals()[row[0]]),
                         row[1],
-                        str(eval("dtype." + row[2] + ".value")),
+                        str(optype.value),
                     )
-            except:
+            except (NameError, KeyError):
                 data = (
                     str(row[0]),
                     row[1],
-                    str(eval("dtype." + row[2] + ".value")),
+                    str(optype.value),
                 )
             cursor.execute(query, data)
 
 
+# pylint: disable=too-many-branches
 def init(config: Dict[str, Any]) -> None:
-    global dhcp_db_conn
-    dhcp_db_name = config["dhcp_db_filename"]
-    dhcp_db_name = (
-        str(dhcp_db_name) if type(dhcp_db_name) is not str else dhcp_db_name
-    )
-    logger.debug("Connecting to %s", dhcp_db_name)
-    dhcp_db_conn = sqlite3.connect(dhcp_db_name)
-    if dhcp_db_conn is None:
-        raise Exception("Connecting to DHCP db {} failed".format(dhcp_db_name))
+    dhcp_db.name = str(config["dhcp_db_filename"])
+    # Connect to the database
+    dhcp_db.connect()
+    if dhcp_db.conn is None:
+        raise RuntimeError(f"Connecting to DHCP db {dhcp_db.name} failed")
 
-    """
-    Updating journal_mode is a persistent update and hence,
-    can result in 'database locked' error if a concurrent
-    writer is in middle of a transaction, unlike regular
-    sql writes that waits until connection timeout to quit.
-    """
+    # Updating journal_mode is a persistent update and hence,
+    # can result in 'database locked' error if a concurrent
+    # writer is in middle of a transaction, unlike regular
+    # sql writes that waits until connection timeout to quit.
     retry = 3
-    for i in range(retry):
+    while retry:
         try:
-            dhcp_db_conn.execute("pragma journal_mode=WAL")
-            logger.info("Connected to %s and set journal mode", dhcp_db_name)
+            dhcp_db.conn.execute("pragma journal_mode=WAL")
+            logger.info("Connected to %s and set journal mode", dhcp_db.name)
             break
         except sqlite3.OperationalError as e:
             if e.args and "database is locked" in e.args[0]:
                 logger.error(
                     "%s while connecting to %s. Retrying..",
                     e.args[0],
-                    dhcp_db_name,
+                    dhcp_db.name,
                 )
                 retry -= 1
                 sleep(0.5)
             else:
                 raise e
+        retry -= 1
     else:
-        dhcp_db_conn.execute("pragma journal_mode=WAL")
-        logger.info("Connected to %s and set journal mode", dhcp_db_name)
+        dhcp_db.conn.execute("pragma journal_mode=WAL")
+        logger.info("Connected to %s and set journal mode", dhcp_db.name)
 
-    cursor = dhcp_db_conn.cursor()
+    cursor = dhcp_db.conn.cursor()
     for command in schema:
         cursor.execute(command)
 
@@ -328,16 +396,14 @@ def init(config: Dict[str, Any]) -> None:
     try:
         for command in alter_table_cmd:
             cursor.execute(command)
-    except:
+    except sqlite3.Error:
         pass
-    dhcp_db_conn.commit()
+    dhcp_db.conn.commit()
 
-    """
-    "valid_attributes" and "valid_v6attributes" tables are shared among all
-    instances of statichcpd. Hence, cleanup of attributes table and their
-    complete re-population need to be done in a single transaction to avoid
-    conflicting writes from multiple users.
-    """
+    # "valid_attributes" and "valid_v6attributes" tables are shared among all
+    # instances of statichcpd. Hence, cleanup of attributes table and their
+    # complete re-population need to be done in a single transaction to avoid
+    # conflicting writes from multiple users.
 
     cursor.execute("delete from valid_attributes")
     cursor.execute("delete from valid_v6attributes")
@@ -367,32 +433,30 @@ def init(config: Dict[str, Any]) -> None:
         populate_table_from(
             "valid_v6attributes", str(config["additional_v6attributes_file"])
         )
-    dhcp_db_conn.commit()
+    dhcp_db.conn.commit()
 
     # Migrate configs from a non-empty database
     for command in migrate_cfgs_cmd:
         cursor.execute(command)
     cursor.close()
-    dhcp_db_conn.commit()
-    dhcp_db_conn.close()
+    dhcp_db.conn.commit()
+    dhcp_db.conn.close()
     logger.debug("Created DHCP config tables")
-    dhcp_db_conn = sqlite3.connect(dhcp_db_name)
-    if dhcp_db_conn is None:
-        raise Exception(
-            "Re-connecting to DHCP db {} failed".format(dhcp_db_name)
-        )
-    dhcp_db_conn.execute("pragma foreign_keys=on")
-    dhcp_db_conn.commit()
+    dhcp_db.conn = sqlite3.connect(dhcp_db.name)
+    if dhcp_db.conn is None:
+        raise RuntimeError(f"Re-connecting to DHCP {dhcp_db.name} failed")
+    dhcp_db.conn.execute("pragma foreign_keys=on")
+    dhcp_db.conn.commit()
 
 
-def exit() -> None:
-    global dhcp_db_conn
-    if dhcp_db_conn is not None:
-        dhcp_db_conn.commit()
-        dhcp_db_conn.close()
+def db_exit() -> None:
+    if dhcp_db.conn is not None:
+        dhcp_db.conn.commit()
+        dhcp_db.conn.close()
     logger.debug("Closed the connection to DHCP database")
 
 
+# pylint: disable=too-many-branches,too-many-statements
 def fetch_host_conf_data(
     db_obj: Union[DHCPv4DB, DHCPv6DB], ifname: str, client_id: Union[Mac, str]
 ) -> Tuple[Dict[int, Any], Optional[str]]:
@@ -401,9 +465,9 @@ def fetch_host_conf_data(
     )
     result: Dict[int, Any] = {}
 
-    if dhcp_db_conn is None:
+    if dhcp_db.conn is None:
         return result, None
-    cursor = dhcp_db_conn.cursor()
+    cursor = dhcp_db.conn.cursor()
     client_if = None
     for opcode, max_count, datatype, value, iface in cursor.execute(
         db_obj.select_command, {"client_id": str(client_id), "ifname": ifname}
@@ -418,7 +482,7 @@ def fetch_host_conf_data(
         client_if = iface
         try:
             datatype = dtype(datatype)
-        except ValueError as err:
+        except ValueError:
             logger.error(
                 "Invalid datatype entry %d for opcode %d "
                 "for client (%s, %s)",

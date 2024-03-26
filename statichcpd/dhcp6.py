@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
-import dpkt
-from dpkt.compat import compat_ord
-from enum import Enum
 import struct
-from .logmgr import logger
 from typing import (
-    Dict,
     Any,
     Tuple,
     Optional,
@@ -14,6 +9,8 @@ from typing import (
     cast,
     TYPE_CHECKING,
 )
+import dpkt
+from .logmgr import logger
 
 
 # DHCP6 Options: RFC 3315 Section 22
@@ -214,12 +211,10 @@ class Message(dpkt.Packet):
         return (
             self.__hdr_len__
             + sum(
-                [
-                    2 + len(o[1])
-                    for o in cast(
-                        Iterable[Tuple[Tuple[int, bytes], ...]], self.opts
-                    )
-                ]
+                2 + len(o[1])
+                for o in cast(
+                    Iterable[Tuple[Tuple[int, bytes], ...]], self.opts
+                )
             )
             + 1
             + len(self.data)
@@ -258,7 +253,7 @@ class Message(dpkt.Packet):
                 return b""
             l = []
             for t, data in self.opts:
-                l.append(struct.pack(">HH%is" % len(data), t, len(data), data))
+                l.append(struct.pack(f">HH{len(data)}s", t, len(data), data))
             return b"".join(l)
 
         def unpack(self, buf: bytes) -> None:
@@ -273,7 +268,7 @@ class Message(dpkt.Packet):
                 if t == 0xFF:
                     buf = buf[2:]
                     break
-                elif t == 0:
+                if t == 0:
                     buf = buf[2:]
                 else:
                     n = int.from_bytes(buf[2:4], byteorder="big")
@@ -332,7 +327,7 @@ class Message(dpkt.Packet):
                 return b""
             l = []
             for t, data in self.opts:
-                l.append(struct.pack(">HH%is" % len(data), t, len(data), data))
+                l.append(struct.pack(f">HH{len(data)}s", t, len(data), data))
             return b"".join(l)
 
         def unpack(self, buf: bytes) -> None:
@@ -347,7 +342,7 @@ class Message(dpkt.Packet):
                 if t == 0xFF:
                     buf = buf[2:]
                     break
-                elif t == 0:
+                if t == 0:
                     buf = buf[2:]
                 else:
                     n = int.from_bytes(buf[2:4], byteorder="big")
@@ -401,7 +396,7 @@ def fetch_all_dhcp6_opt(
     for t, data in dhcp6_msg.opts:
         if t == opt:
             vals.extend([data])
-    if vals is []:
+    if not vals:
         mtype = dhcp6_msg.mtype
         logger.debug(
             "Optcode %d not set in %s message", opt, dhcp6_type_to_str(mtype)

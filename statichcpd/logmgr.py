@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from logging import Logger, getLogger, StreamHandler, Formatter, DEBUG, INFO
+from logging import getLogger, StreamHandler, Formatter, DEBUG, INFO
 from logging.handlers import SysLogHandler
 from argparse import Namespace
 from typing import Type, Optional, Any
@@ -13,7 +13,6 @@ cfmt = "%(asctime)s - %(levelname)s - %(message)s"
 
 
 def set_log_config(logconf: Namespace) -> None:
-    global logger
     logger.setLevel(DEBUG if logconf.verbose else INFO)
     if logconf.foreground:
         chdl = StreamHandler()

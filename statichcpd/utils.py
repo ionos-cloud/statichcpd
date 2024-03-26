@@ -3,11 +3,12 @@ import struct
 import fcntl
 from ctypes import create_string_buffer, addressof
 from typing import Optional
-from .datatypes import *
+from .datatypes import Mac
 from .logmgr import logger
 
 # Filter on port 67 generated using the following command:
-# sudo tcpdump -p -i lo -dd -s 1024 'inbound and (dst port 67 or dst port 547)' | sed -e 's/{ /(/' -e 's/ }/)/'
+# sudo tcpdump -p -i lo -dd -s 1024 'inbound and
+# (dst port 67 or dst port 547)' | sed -e 's/{ /(/' -e 's/ }/)/'
 
 dhcp_filter_list = [
     (0x28, 0, 0, 0xFFFFF004),
@@ -50,7 +51,7 @@ def get_mac_address(ifname: str) -> Optional[Mac]:
         )
         if info:
             s.close()
-            return Mac(":".join("%02x" % b for b in info[18:24]))
+            return Mac(":".join(f"{b:02x}" for b in info[18:24]))
     except OSError as err:
         logger.error("Error %s fetching hardware address of  %s.", err, ifname)
     if s is not None:

@@ -3,9 +3,25 @@ import subprocess
 import shutil
 import sys
 import unittest
+import re
+from pkg_resources import get_distribution, DistributionNotFound
+
+from .. import no_less_than
+
+black_version = "0.0"
+try:
+    vermatch = re.match(r"[\.\d]*", get_distribution("black").version)
+    if vermatch is not None:
+        black_version = vermatch.group()
+except DistributionNotFound:
+    pass
 
 
 class BlackFormatter(unittest.TestCase):
+    @unittest.skipUnless(
+        no_less_than("21.1")(black_version),
+        "Do not trust earlier black versions",
+    )
     def test_black(self):
         if not shutil.which("black"):
             self.fail(f"black not installed.")

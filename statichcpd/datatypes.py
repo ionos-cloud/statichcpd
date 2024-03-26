@@ -2,11 +2,11 @@
 
 from abc import ABC
 from ipaddress import IPv4Network, IPv4Address
-from .logmgr import logger
 from typing import Union, Optional
-from dpkt.compat import compat_ord
 from dataclasses import dataclass
 import binascii
+from dpkt.compat import compat_ord
+from .logmgr import logger
 
 
 class _IntXX(ABC):
@@ -19,18 +19,14 @@ class _IntXX(ABC):
 class Int16(_IntXX):
     def __init__(self, val: int):
         if val.bit_length() > 16:
-            raise ValueError(
-                "Value {} cannot be represented as Int16".format(val)
-            )
+            raise ValueError(f"Value {val} cannot be represented as Int16")
         self.value = val
 
 
 class Int32(_IntXX):
     def __init__(self, val: int) -> None:
         if val.bit_length() > 32:
-            raise ValueError(
-                "Value {} cannot be represented as Int32".format(val)
-            )
+            raise ValueError(f"Value {val} cannot be represented as Int32")
         self.value = val
 
 
@@ -67,17 +63,17 @@ class Mac:
             self.val = mac.val
         else:
             raise ValueError(
-                """Value {} of type {} cannot be represented
-                               as Mac address""".format(
-                    mac, type(mac)
+                (
+                    f"Value {mac} of type {type(mac)} "
+                    "cannot be represented as Mac address"
                 )
             )
 
     def __str__(self) -> str:
-        return ":".join("%02x" % compat_ord(b) for b in self.val)
+        return ":".join(f"{compat_ord(b):02x}" for b in self.val)
 
     def __repr__(self) -> str:
-        return type(self).__name__ + "(" + str(self) + ")"
+        return f"{type(self).__name__}({str(self)})"
 
     def __bytes__(self) -> bytes:
         return self.val

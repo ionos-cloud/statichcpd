@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 
+import struct
+from ipaddress import IPv4Address, AddressValueError
+from typing import Any, List, Tuple, Optional, Dict, Union, Callable
+from enum import Enum
 import dpkt
 from dpkt import dhcp
 from dpkt.compat import compat_ord
-import struct
-from ipaddress import IPv4Address, AddressValueError
-import socket
-from configparser import SectionProxy
-from typing import Any, List, Tuple, Optional, Dict, Union, Callable
-from enum import Enum
 
-from .datatypes import *
-from .database_manager import *
+from .datatypes import Mac, Int16, Int32, Staticrt, DHCPError, DHCPResponse
+from .database_manager import (
+    fetch_host_conf_data,
+    DHCPv4DB,
+    DHCP_IP_OPCODE,
+    DHCP_NON_DEFAULT_SERVERID_OPCODE,
+)
 from .logmgr import logger
 
 dhcp_type_to_str: Dict[int, str] = {
@@ -26,18 +29,31 @@ dhcp_type_to_str: Dict[int, str] = {
 }
 
 dhcppacket_type = dhcp.DHCP
-default_lease_time = 0
-max_lease_time = 0
+
+
+class V4Config:
+    default_lease_time: int = 0
+    max_lease_time: int = 0
+
+    @classmethod
+    def init(
+        cls,
+        default_lease: int,
+        max_lease: int,
+    ) -> None:
+        cls.default_lease_time = default_lease
+        cls.max_lease_time = max_lease
 
 
 def init(config: Dict[str, Any]) -> None:
-    global default_lease_time, max_lease_time
-    default_lease_time = int(config.get("default_lease_time", 600))
-    max_lease_time = int(config.get("max_lease_time", 7200))
+    V4Config.init(
+        int(config.get("default_lease_time", 600)),
+        int(config.get("max_lease_time", 7200)),
+    )
 
 
 def mac_addr(address: bytes) -> str:
-    return ":".join("%02x" % compat_ord(b) for b in address)
+    return ":".join(f"{compat_ord(b):02x}" for b in address)
 
 
 def fetch_dhcp_opt(dhcp_obj: dhcp.DHCP, opt: int) -> Any:
@@ -56,7 +72,7 @@ def fetch_dhcp_type(dhcp_obj: dhcp.DHCP) -> Optional[int]:
     data = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_MSGTYPE)
     try:
         mtype: int = struct.unpack("b", data)[0] if data else None
-    except:
+    except (TypeError, struct.error):
         # Catch any posible unpack errors
         # eg: If the received data is not of length 1 byte, unpack will fail
         return None
@@ -67,7 +83,7 @@ def fetch_dhcp_req_ip(dhcp_obj: dhcp.DHCP) -> Optional[IPv4Address]:
     data = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_REQ_IP)
     try:
         return None if data is None else IPv4Address(data)
-    except Exception as err:
+    except ValueError as err:
         opcode = fetch_dhcp_type(dhcp_obj)
         logger.debug(
             "%s: Failed to parse requested IP (%s) for %s packet from %s",
@@ -121,14 +137,13 @@ def fetch_destination_address(
 def fetch_addr_lease_time(
     dhcp_obj: dhcp.DHCP, opt_tuple: Tuple[Tuple[int, bytes], ...]
 ) -> int:
-    opt_list = list(opt_tuple)
-    lease_time = default_lease_time
+    lease_time = V4Config.default_lease_time
 
     # If a lease time is requested by client, validate and assign accordingly
     opts = [ele[0] for ele in opt_tuple]  # type: List[int]
     if dhcp.DHCP_OPT_LEASE_SEC in opts:
         req_lease_time = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_LEASE_SEC)
-        if req_lease_time <= max_lease_time:
+        if req_lease_time <= V4Config.max_lease_time:
             lease_time = req_lease_time
     return lease_time
 
@@ -156,46 +171,46 @@ def append_mandatory_options(
 # Return: dhcp options list with corresponding values from the database
 
 
-def construct_dhcp_opt_list(
-    request_list_opt: List[int], ifname: str, host_conf_data: Dict[int, Any]
+def construct_dhcp_opt_list(  # pylint: disable=too-many-branches
+    request_list_opt: List[int], host_conf_data: Dict[int, Any]
 ) -> Tuple[Tuple[int, bytes], ...]:
     opt_list: List[Tuple[int, bytes]] = []
-    if request_list_opt == None:
+    if request_list_opt is None:
         logger.debug("No parameter request list")
         return tuple(opt_list)
     for opcode in request_list_opt:
-        if (
-            opcode in host_conf_data
-        ):  # For every option value, do the appropriate encoding
-            data = host_conf_data[opcode]
-            encoded_data = None
-            if isinstance(data, IPv4Address):
-                encoded_data = data.packed
-            elif isinstance(data, str):
-                encoded_data = data.encode("utf-8")
-            elif isinstance(data, Int16):
-                encoded_data = (data.value).to_bytes(2, "big")
-            elif isinstance(data, Int32):
-                encoded_data = (data.value).to_bytes(4, "big")
-            elif isinstance(data, list) and len(data) > 0:
-                if all(isinstance(ele, IPv4Address) for ele in data):
-                    encoded_data = b"".join([elem.packed for elem in data])
-                elif all(isinstance(ele, Staticrt) for ele in data):
-                    encoded_data = b"".join([bytes(elem) for elem in data])
-                else:
-                    logger.error(
-                        "Elements of unexpected datatype "
-                        "in the client parameter list: %s",
-                        data,
-                    )
+        if opcode not in host_conf_data:
+            continue
+        # For every option value, do the appropriate encoding
+        data = host_conf_data[opcode]
+        encoded_data = None
+        if isinstance(data, IPv4Address):
+            encoded_data = data.packed
+        elif isinstance(data, str):
+            encoded_data = data.encode("utf-8")
+        elif isinstance(data, Int16):
+            encoded_data = (data.value).to_bytes(2, "big")
+        elif isinstance(data, Int32):
+            encoded_data = (data.value).to_bytes(4, "big")
+        elif isinstance(data, list) and len(data) > 0:
+            if all(isinstance(ele, IPv4Address) for ele in data):
+                encoded_data = b"".join([elem.packed for elem in data])
+            elif all(isinstance(ele, Staticrt) for ele in data):
+                encoded_data = b"".join([bytes(elem) for elem in data])
             else:
                 logger.error(
-                    "Value(%s) of unexpected type received for opcode %d",
+                    "Elements of unexpected datatype "
+                    "in the client parameter list: %s",
                     data,
-                    opcode,
                 )
-            if encoded_data:
-                opt_list.append((opcode, encoded_data))
+        else:
+            logger.error(
+                "Value(%s) of unexpected type received for opcode %d",
+                data,
+                opcode,
+            )
+        if encoded_data:
+            opt_list.append((opcode, encoded_data))
     return tuple(opt_list)
 
 
@@ -226,15 +241,12 @@ def construct_dhcp_packet(
 
 def construct_dhcp_offer(
     dhcp_obj: dhcp.DHCP,
-    ifname: str,
     server_id: IPv4Address,
     offer_ip: Optional[IPv4Address],
     request_list_opt: List[int],
     host_conf_data: Dict[int, Any],
 ) -> Optional[dhcppacket_type]:
-    opt_list = construct_dhcp_opt_list(
-        request_list_opt, ifname, host_conf_data
-    )
+    opt_list = construct_dhcp_opt_list(request_list_opt, host_conf_data)
     if (
         offer_ip is None and not opt_list
     ):  # If no other parameters were requested by client, should offer be sent?
@@ -247,16 +259,13 @@ def construct_dhcp_offer(
 
 def construct_dhcp_nak(
     dhcp_obj: dhcp.DHCP,
-    ifname: str,
     server_id: IPv4Address,
     requested_ip: Optional[IPv4Address],
     request_list_opt: List[int],
     host_conf_data: Dict[int, Any],
 ) -> dhcppacket_type:
     logger.debug("Server IP for NAK: %s", server_id)
-    opt_list = construct_dhcp_opt_list(
-        request_list_opt, ifname, host_conf_data
-    )
+    opt_list = construct_dhcp_opt_list(request_list_opt, host_conf_data)
     opt_list = append_mandatory_options(
         dhcp_obj, opt_list, dhcp.DHCPNAK, server_id
     )
@@ -265,16 +274,13 @@ def construct_dhcp_nak(
 
 def construct_dhcp_ack(
     dhcp_obj: dhcp.DHCP,
-    ifname: str,
     server_id: IPv4Address,
     client_ip: Optional[IPv4Address],
     request_list_opt: List[int],
     host_conf_data: Dict[int, Any],
 ) -> Optional[dhcppacket_type]:
     logger.debug("Server IP for ACK: %s", server_id)
-    opt_list = construct_dhcp_opt_list(
-        request_list_opt, ifname, host_conf_data
-    )
+    opt_list = construct_dhcp_opt_list(request_list_opt, host_conf_data)
     opt_list = append_mandatory_options(
         dhcp_obj, opt_list, dhcp.DHCPACK, server_id
     )
@@ -295,14 +301,14 @@ def process_dhcp_discover(
 
     if not host_conf_data:
         return DHCPError(
-            error=f"No configuration data found",
+            error="No configuration data found",
             client=client_mac,
             ifname=ifname,
         )
 
     if not server_iface:
         return DHCPError(
-            error=f"No server interface found",
+            error="No server interface found",
             client=client_mac,
             ifname=ifname,
         )
@@ -325,11 +331,11 @@ def process_dhcp_discover(
         server_id = host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE]
 
     dhcp_offer = construct_dhcp_offer(
-        dhcp_obj, ifname, server_id, offer_ip, request_list_opt, host_conf_data
+        dhcp_obj, server_id, offer_ip, request_list_opt, host_conf_data
     )
     if not dhcp_offer:
         return DHCPError(
-            error=f"Constructing DHCP offer packet failed",
+            error="Constructing DHCP offer packet failed",
             client=client_mac,
             ifname=ifname,
         )
@@ -344,7 +350,8 @@ def process_dhcp_discover(
             error=f"Crash coverting dhcp_offer to bytes: dhcp_offer={dhcp_offer}, dhcp_offer.opts="
             + getattr(dhcp_offer, "opts", "No opts attr")
             + ", dhcpoffer.data="
-            + getattr(dhcp_offer, "data", "No data attr"),
+            + getattr(dhcp_offer, "data", "No data attr")
+            + f": {e}",
             ifname=ifname,
             client=client_mac,
         )
@@ -385,18 +392,17 @@ def fetch_client_state(
     if not ciaddr.is_unspecified:
         if not requested_ip and (not server_id or server_id.is_unspecified):
             return state.RENEWING_REBINDING
-        else:
-            return state.INVALID
+        return state.INVALID
     try:
         if IPv4Address(requested_ip):
             return state.SELECTING_INIT_REBOOT
-    except:
+    except ValueError:
         return state.INVALID
 
     return state.INVALID
 
 
-def process_dhcp_request(
+def process_dhcp_request(  # pylint: disable=too-many-branches
     dhcp_obj: dhcp.DHCP, server_id: IPv4Address, ifname: str
 ) -> Union[DHCPError, DHCPResponse]:
     client_mac = Mac(dhcp_obj.chaddr)
@@ -423,31 +429,28 @@ def process_dhcp_request(
 
     if not host_conf_data:
         return DHCPError(
-            error=f"No configuration data found",
+            error="No configuration data found",
             client=client_mac,
             ifname=ifname,
         )
 
     if not server_iface:
         return DHCPError(
-            error=f"No valid server interface found",
+            error="No valid server interface found",
             client=client_mac,
             ifname=ifname,
         )
 
-    offer_ip = None
-    if DHCP_IP_OPCODE in host_conf_data:
-        offer_ip = host_conf_data[DHCP_IP_OPCODE]
+    offer_ip = host_conf_data.get(DHCP_IP_OPCODE)
 
+    server_id = host_conf_data.get(DHCP_NON_DEFAULT_SERVERID_OPCODE, server_id)
     if DHCP_NON_DEFAULT_SERVERID_OPCODE in host_conf_data:
         logger.debug(
-            "For client %s on intf %s using non-default server id: %s (default server id: %s))",
+            "For client %s on intf %s using non-default server id: %s",
             str(client_mac),
             ifname,
-            host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE],
             server_id,
         )
-        server_id = host_conf_data[DHCP_NON_DEFAULT_SERVERID_OPCODE]
 
     valid_serverid = (
         not server_id_in_request
@@ -456,7 +459,11 @@ def process_dhcp_request(
     )
     if not valid_serverid:
         return DHCPError(
-            error=f"Server identifier mismatch: ServerID from client = {server_id_in_request} Configured ServerID = {server_id}",
+            error=(
+                "Server identifier mismatch: "
+                f"ServerID from client = {server_id_in_request}"
+                f" Configured ServerID = {server_id}"
+            ),
             client=client_mac,
             ifname=ifname,
         )
@@ -464,7 +471,8 @@ def process_dhcp_request(
     # Validate the requested IP
     if client_state is state.INVALID:
         logger.debug(
-            "DHCP-Request: Invalid packet received from %s with server_id: %s ciaddr: %s requested_ip: %s",
+            "DHCP-Request: Invalid packet received from %s with server_id: %s "
+            "ciaddr: %s requested_ip: %s",
             str(client_mac),
             server_id_in_request,
             ciaddr_in_request,
@@ -473,52 +481,42 @@ def process_dhcp_request(
         is_valid_request = False
 
     else:
-        if client_state is state.SELECTING_INIT_REBOOT:
-            if not offer_ip:
-                logger.debug(
-                    "DHCP-Request: No offer IP found for client %s on intf %s with request IP %s",
-                    str(client_mac),
-                    ifname,
-                    requested_ip,
-                )
-                is_valid_request = False
-            else:
-                is_valid_request = (
-                    requested_ip is not None
-                    and not requested_ip.is_unspecified
-                    and not offer_ip.is_unspecified
-                    and offer_ip == requested_ip
-                )
+        if not offer_ip:
+            logger.debug(
+                "DHCP-Request: No offer IP found for client %s in %s state "
+                "on intf %s with request IP %s",
+                str(client_mac),
+                client_state.name,
+                ifname,
+                requested_ip,
+            )
+            is_valid_request = False
+        elif client_state is state.SELECTING_INIT_REBOOT:
+            is_valid_request = (
+                requested_ip is not None
+                and not requested_ip.is_unspecified
+                and not offer_ip.is_unspecified
+                and offer_ip == requested_ip
+            )
         else:
             # If the client is in RENEWING or REBINDING state, request IP is not filled
             # So, validate the available address allocation with client_ip (ciaddr)
-            is_valid_request = True
-            if not offer_ip:
-                logger.debug(
-                    "DHCP-Request: No offer IP found for client %s in %s state on intf %s",
-                    str(client_mac),
-                    client_state.name,
-                    ifname,
-                )
-                is_valid_request = False
-            else:
-                # In renew/rebind state the client will have a valid ciaddr
-                client_ip = IPv4Address(ciaddr_in_request)
-                is_valid_request = (
-                    client_ip is not None
-                    and not client_ip.is_unspecified
-                    and not offer_ip.is_unspecified
-                    and offer_ip == client_ip
-                )
+            client_ip = IPv4Address(ciaddr_in_request)
+            is_valid_request = (
+                client_ip is not None
+                and not client_ip.is_unspecified
+                and not offer_ip.is_unspecified
+                and offer_ip == client_ip
+            )
     dhcp_packet = None
 
     if is_valid_request:
         logger.debug("Constructing DHCP Accept with IP: %s", offer_ip)
         request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
-        # In case of valid request, it is safer to construct reply packet with offer IP, than request IP
+        # In case of valid request, it is safer to construct reply packet with
+        # offer IP, than request IP
         dhcp_packet = construct_dhcp_ack(
             dhcp_obj,
-            ifname,
             server_id,
             offer_ip,
             request_list_opt,
@@ -530,11 +528,10 @@ def process_dhcp_request(
             logger.debug(
                 "Requested IP (%s) doesn't match available IP (%s)",
                 requested_ip if requested_ip is not None else client_ip,
-                offer_ip,
+                offer_ip if offer_ip is not None else "None",
             )
         dhcp_packet = construct_dhcp_nak(
             dhcp_obj,
-            ifname,
             server_id,
             requested_ip,
             request_list_opt,
@@ -543,7 +540,7 @@ def process_dhcp_request(
 
     if dhcp_packet is None:
         return DHCPError(
-            error=f"Constructing DHCP response packet failed",
+            error="Constructing DHCP response packet failed",
             ifname=ifname,
             client=client_mac,
         )
@@ -564,14 +561,14 @@ def process_dhcp_inform(
     )
     if not host_conf_data:
         return DHCPError(
-            error=f"No configuration data found",
+            error="No configuration data found",
             client=client_mac,
             ifname=ifname,
         )
 
     if not server_iface:
         return DHCPError(
-            error=f"No valid server interface found",
+            error="No valid server interface found",
             client=client_mac,
             ifname=ifname,
         )
@@ -589,11 +586,11 @@ def process_dhcp_inform(
     logger.debug("Constructing DHCP ACK for client: %s", client_mac)
     request_list_opt = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_PARAM_REQ)
     dhcp_packet = construct_dhcp_ack(
-        dhcp_obj, ifname, server_id, None, request_list_opt, host_conf_data
+        dhcp_obj, server_id, None, request_list_opt, host_conf_data
     )
     if dhcp_packet is None:
         return DHCPError(
-            error=f"Constructing DHCP response to DHCPINFORM failed",
+            error="Constructing DHCP response to DHCPINFORM failed",
             ifname=ifname,
             client=client_mac,
         )
@@ -609,7 +606,6 @@ def build_frame(
     dest_mac: Mac,
     dest_ip: IPv4Address,
     src_ip: IPv4Address,
-    ifname: str,
     server_mac: Mac,
 ) -> bytes:
     dh = dpkt.dhcp.DHCP(dhcp_data)
@@ -639,7 +635,7 @@ dhcp_packet_handlers: Dict[
 }
 
 
-def process_dhcp_packet(
+def process_dhcp_packet(  # pylint: disable = too-many-return-statements
     ifname: str,
     server_addr: Optional[str],
     pkt_src_mac: Mac,
@@ -656,7 +652,7 @@ def process_dhcp_packet(
 
     try:
         server_id = IPv4Address(server_addr)
-    except ValueError as err:
+    except ValueError:
         server_id = IPv4Address("0.0.0.0")
 
     if dhcp_type not in dhcp_packet_handlers:
@@ -678,9 +674,9 @@ def process_dhcp_packet(
     if response.data is None or response.daddr is None:
         return (
             DHCPError(
-                error=f"Empty DHCP response"
+                error="Empty DHCP response"
                 if response.data is None
-                else f"Invalid destination address",
+                else "Invalid destination address",
                 ifname=ifname,
                 client=None,
             ),
@@ -707,7 +703,6 @@ def process_dhcp_packet(
                         dest_mac,
                         response.daddr,
                         response.server_id,
-                        ifname,
                         server_mac,
                     ),
                     daddr=response.daddr,
@@ -716,10 +711,10 @@ def process_dhcp_packet(
                 ),
                 None,
             )
-        elif not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
+        if not IPv4Address(dhcp_obj.ciaddr).is_unspecified:
             return (response, (IPv4Address(dhcp_obj.ciaddr), 68))
-        else:  # Case of valid dhcp_obj.giaddr
-            return (response, (IPv4Address(dhcp_obj.giaddr), 67))
+        # Case of valid dhcp_obj.giaddr
+        return (response, (IPv4Address(dhcp_obj.giaddr), 67))
 
     except (AddressValueError, ValueError) as err:
         return (

@@ -12,7 +12,8 @@ Build-Depends: debhelper (>= 11),
  python3-dpkt,
  python3-pyroute2,
  mypy,
- black
+ black,
+ pylint
 
 Package: statichcpd
 Architecture: any

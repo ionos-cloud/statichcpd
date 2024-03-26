@@ -1,7 +1,40 @@
 #!/usr/bin/env python3
 
-from select import poll, POLLIN, POLLOUT, POLLERR
-from pyroute2 import IPRoute
+"""
+This module listens to packet events on certain netdevices
+and processes any DHCP packet to send reponses to registered
+clients
+"""
+
+from os import abort
+from struct import pack
+from time import time
+from select import poll, POLLIN
+import socket
+from typing import (
+    Dict,
+    List,
+    Any,
+    Tuple,
+    TypeVar,
+    Optional,
+    Set,
+    Callable,
+    Generic,
+    Union,
+    Pattern,
+)
+from ipaddress import AddressValueError, IPv6Address, IPv4Address
+from dataclasses import dataclass
+import re
+from dpkt.ethernet import Ethernet
+from dpkt.ip import IP
+from dpkt.ip6 import IP6
+from dpkt.udp import UDP
+from dpkt.dhcp import DHCP
+from dpkt import NeedData
+
+from pyroute2 import IPRoute  # pylint: disable=no-name-in-module
 from pyroute2.netlink import rtnl
 from pyroute2.netlink.rtnl.ifinfmsg import ifinfmsg
 from pyroute2.netlink.rtnl.ifaddrmsg import ifaddrmsg
@@ -14,67 +47,68 @@ except ImportError:
         """Dummy exception definition for older versions of pyroute."""
 
 
-import socket
-from logging import Logger
-from typing import (
-    Dict,
-    List,
-    Any,
-    Tuple,
-    TypeVar,
-    Optional,
-    Set,
-    Callable,
-    Generic,
-    Union,
-)
-from ipaddress import AddressValueError, IPv6Address, IPv4Address
-from dpkt import dhcp
-import re
-from configparser import SectionProxy
-import dpkt
-from struct import pack
-from time import time
-from os import abort
-
 from .dhcp_packet_mgr import process_dhcp_packet
 from .dhcp6_packet_mgr import process_dhcp6_packet
-from .database_manager import exit
-from .datatypes import *
+from .database_manager import db_exit
+from .datatypes import Mac, DHCPError
 from .logmgr import logger
-from .dhcp6 import *
-from .utils import *
+from .dhcp6 import Message
+from .utils import strtobool, get_mac_address, add_rawsock_binding
 
 any_nlmsg = TypeVar("any_nlmsg", ifinfmsg, ifaddrmsg)
-server_regexobj = None
-routing_disabled_with_udpsock = False
-routing_disabled_with_rawsock = False
-dhcp_ratelimit = 1000
-intf_suspension_period = 1
+
+
+class ServerConfig:
+    server_regexobj = re.compile(r".*")
+    routing_disabled_with_udpsock = False
+    routing_disabled_with_rawsock = False
+    dhcp_ratelimit = 1000
+    intf_suspension_period = 1
+
+    @classmethod
+    def init(
+        cls,
+        server_regex: Pattern[Any],
+        use_udp: bool,
+        use_raw: bool,
+        dhcp_ratelimit: int,
+        intf_suspension: int,
+    ) -> None:
+        cls.server_regexobj = server_regex
+        cls.routing_disabled_with_udpsock = use_udp
+        cls.routing_disabled_with_rawsock = use_raw
+        cls.dhcp_ratelimit = dhcp_ratelimit
+        cls.intf_suspension_period = intf_suspension
 
 
 def init(config: Dict[str, Any]) -> None:
-    global server_regexobj, routing_disabled_with_udpsock, routing_disabled_with_rawsock, dhcp_ratelimit
     server_regexobj = re.compile(config["served_interface_regex"])
-    routing_disabled_with_udpsock = strtobool(
+    disable_with_udpsock = strtobool(
         config.get("disable_routing_with_udpsock", "False")
     )
-    routing_disabled_with_rawsock = strtobool(
+    disable_with_rawsock = strtobool(
         config.get("disable_routing_with_rawsock", "False")
     )
-    if routing_disabled_with_udpsock and routing_disabled_with_rawsock:
-        logger.error(
-            "Invalid configuration: routing disabled_with udpsock=%s rawsock=%s",
-            routing_disabled_with_udpsock,
-            routing_disabled_with_rawsock,
+    if disable_with_udpsock and disable_with_rawsock:
+        raise RuntimeError(
+            "Invalid configuration: "
+            f"routing disabled_with udpsock={disable_with_udpsock}"
+            f"rawsock={disable_with_rawsock}"
         )
-        raise Exception
     dhcp_ratelimit = int(config.get("dhcp_ratelimit", 1000))
+    intf_suspension = 1
+    ServerConfig.init(
+        server_regexobj,
+        disable_with_udpsock,
+        disable_with_rawsock,
+        dhcp_ratelimit,
+        intf_suspension,
+    )
 
 
 def name_matches(ifname: str) -> bool:
-    if server_regexobj is not None:
-        return bool(server_regexobj.search(ifname))
+    if ServerConfig.server_regexobj is not None:
+        return bool(ServerConfig.server_regexobj.search(ifname))
     return False
 
 
@@ -114,6 +148,7 @@ def retry_interrupted(
 
 
 class InterfaceCacheEntry:
+    # pylint: disable=too-many-instance-attributes
     def __init__(self, ifname: str, idx: int) -> None:
         self.raw_fd: Optional[int] = None
         self.rawsock: Optional[socket.socket] = None
@@ -354,10 +389,10 @@ class Controller(
                 break
 
 
+@dataclass
 class RateLimiter:
-    def __init__(self, ts: float, pkts: int = 0) -> None:
-        self.first_pkt_ts = ts
-        self.pkts = pkts
+    first_pkt_ts: float
+    pkts: int
 
 
 class Poll:
@@ -394,7 +429,7 @@ class Poll:
     ) -> None:
         recovered = 0
         for fd, ts in self.suspended:
-            if now_t - ts < intf_suspension_period:
+            if now_t - ts < ServerConfig.intf_suspension_period:
                 break
             # Deleted/deactivated FDs are not expected to be present in
             # the list of suspended FDs
@@ -409,12 +444,15 @@ class Poll:
             return
         now_t = time()
         if fd not in self.ratelimiter:
-            self.ratelimiter[fd] = RateLimiter(now_t)
+            self.ratelimiter[fd] = RateLimiter(first_pkt_ts=now_t, pkts=0)
             return
 
         rl_entry = self.ratelimiter[fd]
         if rl_entry.pkts == limit:
-            if now_t - rl_entry.first_pkt_ts <= intf_suspension_period:
+            if (
+                now_t - rl_entry.first_pkt_ts
+                <= ServerConfig.intf_suspension_period
+            ):
                 logger.info(
                     "Ratelimit Warning: %s hit maximum allowable packets in <=1 sec. "
                     "Shutting down for a second",
@@ -430,7 +468,6 @@ class Poll:
 
 def process_nlmsg(nlmsg: any_nlmsg, ctrl: Controller[any_nlmsg]) -> None:
     nl_event = nlmsg["event"]
-    if_index = int(nlmsg["index"])
     if nl_event not in [
         "RTM_NEWLINK",
         "RTM_DELLINK",
@@ -449,7 +486,7 @@ def process_nlmsg(nlmsg: any_nlmsg, ctrl: Controller[any_nlmsg]) -> None:
     if nl_event == "RTM_NEWLINK":
         state = nlmsg.get_attr("IFLA_OPERSTATE")
         ifcache_entry = ctrl.fetch_ifcache_by_ifname(ifname)
-        if state == "LOWERLAYERDOWN" or state == "DOWN":
+        if state in ("LOWERLAYERDOWN", "DOWN"):
             logger.debug("State change to DOWN for %s ", ifname)
             # When the state is down for an existing entry, add it
             # to the list of intfs to be deactivated such that the
@@ -485,13 +522,14 @@ def process_nlmsg(nlmsg: any_nlmsg, ctrl: Controller[any_nlmsg]) -> None:
         ctrl.nlmsgs_to_process.append(nlmsg)
 
 
+# pylint: disable=too-many-locals,too-many-branches,too-many-statements
 def start_server() -> None:
     ctrl = Controller()
+    nlsock = IPRoute()
     try:
         # 1. Create an NL socket and bind
-        nlsock = IPRoute()
         try:
-            nlsock.bind(groups=(rtnl.RTMGRP_LINK | rtnl.RTMGRP_IPV4_IFADDR))
+            nlsock.bind(rtnl.RTMGRP_LINK | rtnl.RTMGRP_IPV4_IFADDR)
         except OSError as err:
             logger.exception(
                 "%s: Exception binding netlink socket. Server exiting.", err
@@ -511,7 +549,7 @@ def start_server() -> None:
             logger.error(
                 "Error %s opening IPv4 UDP socket for unicast replies.", err
             )
-            if not routing_disabled_with_rawsock:
+            if not ServerConfig.routing_disabled_with_rawsock:
                 abort()
 
         try:
@@ -526,8 +564,10 @@ def start_server() -> None:
             )
             abort()
 
-        # 3. Add any existing served interfaces to the ifcache if state is UP or if it has IP address.
-        #    Interfaces in UP state should be added to the poll list(to handle cases of process restart)
+        # 3. Add any existing served interfaces to the ifcache
+        #    if state is UP or if it has IP address.
+        #    Interfaces in UP state should be added to the poll
+        #    list(to handle cases of process restart)
 
         for intf in retry_interrupted(nlsock.get_links):
             state = intf.get_attr("IFLA_OPERSTATE")
@@ -572,366 +612,362 @@ def start_server() -> None:
 
         ifcache_entry: Optional[InterfaceCacheEntry]
         # 4. Keep checking for any events on the polled FDs and process them
-        while True:
+        # TODO: Clean up and simplify this piece of code
+        while True:  # pylint: disable=too-many-nested-blocks
             fdEvent = ctrl.poller_obj.poll(1024)
             # Recover all eligible FDs that were suspended earlier
             ctrl.poller_obj.resume_suspended_fds(time(), ctrl.empty_socket)
             for fd, event in fdEvent:
-                if event & POLLIN:  # TODO: Add code to handle other events
-                    if fd == nlsock.fileno():
-                        for nlmsg in nlsock.get():
-                            process_nlmsg(nlmsg, ctrl)
-                    else:
-                        ifcache_entry = ctrl.fetch_ifcache_by_fd(fd)
-                        if not ifcache_entry:
-                            """
-                            A given FD is expected to be valid for atleast a single iteration
-                            of poll events, hence ifcache_entrty shouldn't be NULL
-                            """
-                            logger.error(
-                                "Received packet on untracked interface file descriptor %d!",
-                                fd,
-                            )
-                            continue
-                        intf_sock = ifcache_entry.rawsock
-                        ifname = ifcache_entry.ifname
-                        if intf_sock is None:
-                            logger.error(
-                                "Error finding a valid socket "
-                                "for interface %s and file descriptor %d.",
-                                ifname,
-                                fd,
-                            )
-                            continue
-                        try:
-                            msg, (
-                                ifname,
-                                ethproto,
-                                pkttype,
-                                arphrd,
-                                rawmac,
-                            ) = intf_sock.recvfrom(1024)
-                            ctrl.poller_obj.ratelimit_monitor(
-                                ifcache_entry.raw_fd, dhcp_ratelimit
-                            )
-                        except OSError as err:
-                            logger.error(
-                                "Error %s receiving packet on %s. "
-                                " Stop servicing interface.",
-                                err,
-                                ifname,
-                            )
-                            ctrl.add_if_to_deactivate_list(ifname, True)
-                            continue
+                if not event & POLLIN:
+                    continue
+                if fd == nlsock.fileno():
+                    for nlmsg in nlsock.get():
+                        process_nlmsg(nlmsg, ctrl)
+                else:
+                    ifcache_entry = ctrl.fetch_ifcache_by_fd(fd)
+                    if not ifcache_entry:
+                        # A given FD is expected to be valid for atleast a single iteration
+                        # of poll events, hence ifcache_entrty shouldn't be NULL
+                        logger.error(
+                            "Received packet on untracked interface file descriptor %d!",
+                            fd,
+                        )
+                        continue
+                    intf_sock = ifcache_entry.rawsock
+                    ifname = ifcache_entry.ifname
+                    if intf_sock is None:
+                        logger.error(
+                            "Error finding a valid socket "
+                            "for interface %s and file descriptor %d.",
+                            ifname,
+                            fd,
+                        )
+                        continue
+                    try:
+                        msg, (
+                            ifname,
+                            _,
+                            _,
+                            _,
+                            rawmac,
+                        ) = intf_sock.recvfrom(1024)
+                        ctrl.poller_obj.ratelimit_monitor(
+                            ifcache_entry.raw_fd, ServerConfig.dhcp_ratelimit
+                        )
+                    except OSError as err:
+                        logger.error(
+                            "Error %s receiving packet on %s. "
+                            " Stop servicing interface.",
+                            err,
+                            ifname,
+                        )
+                        ctrl.add_if_to_deactivate_list(ifname, True)
+                        continue
 
-                        # From the time when raw packet socket is opened until when
-                        # it is bound to the interface, packets to other interfaces
-                        # are possibly queued in this socket queue. Ignore such
-                        # packets.
-                        if ifname != ifcache_entry.ifname:
-                            logger.error(
-                                "Ignoring irrelevant packet: Socket on %s received data"
-                                " with interface name as %s",
-                                ifcache_entry.ifname,
-                                ifname,
-                            )
-                            continue
+                    # From the time when raw packet socket is opened until when
+                    # it is bound to the interface, packets to other interfaces
+                    # are possibly queued in this socket queue. Ignore such
+                    # packets.
+                    if ifname != ifcache_entry.ifname:
+                        logger.error(
+                            "Ignoring irrelevant packet: Socket on %s received data"
+                            " with interface name as %s",
+                            ifcache_entry.ifname,
+                            ifname,
+                        )
+                        continue
 
-                        try:
-                            eth = dpkt.ethernet.Ethernet(msg)
-                            isv4 = True
-                            if not isinstance(eth.data, dpkt.ip.IP):
-                                if not isinstance(eth.data, dpkt.ip6.IP6):
-                                    continue
-                                isv4 = False
-
-                            ip = eth.data
-                            if not isinstance(ip.data, dpkt.udp.UDP):
+                    try:
+                        eth = Ethernet(msg)
+                        isv4 = True
+                        if not isinstance(eth.data, IP):
+                            if not isinstance(eth.data, IP6):
                                 continue
+                            isv4 = False
 
-                            udp = ip.data
-                        except (OSError, dpkt.NeedData) as err:
+                        ip = eth.data
+                        if not isinstance(ip.data, UDP):
+                            continue
+
+                        udp = ip.data
+                    except (OSError, NeedData) as err:
+                        logger.error(
+                            "Error %s receiving packet on %s. ",
+                            err,
+                            ifname,
+                        )
+                        continue
+                    if isv4:
+                        try:
+                            dh = DHCP(bytes(udp.data))
+                        except (OSError, NeedData) as err:
                             logger.error(
                                 "Error %s receiving packet on %s. ",
                                 err,
                                 ifname,
                             )
                             continue
-                        if isv4:
-                            try:
-                                dh = dpkt.dhcp.DHCP(bytes(udp.data))
-                            except (OSError, dpkt.NeedData) as err:
-                                logger.error(
-                                    "Error %s receiving packet on %s. ",
-                                    err,
-                                    ifname,
+                        src_mac = Mac(eth.src)  # pylint: disable=no-member
+                        server_ip = ifcache_entry.ip
+                        if server_ip is None:
+                            logger.warning(
+                                "Received DHCP packet on interface %s with no IP address",
+                                ifname,
+                            )
+                        if ifcache_entry.mac is None:
+                            logger.error(
+                                "No hardware address found on the interface %s.",
+                                ifname,
+                            )
+                            logger.error(
+                                "Unable to process DHCP packet from %s",
+                                src_mac,
+                            )
+                            continue
+
+                        logger.debug(
+                            "Received DHCP packet on %s from %s",
+                            ifname,
+                            src_mac,
+                        )
+
+                        dhcp_response, gw_address = process_dhcp_packet(
+                            ifname,
+                            server_ip,
+                            src_mac,
+                            dh,
+                            ifcache_entry.mac,
+                            ServerConfig.routing_disabled_with_rawsock,
+                        )
+                        if isinstance(dhcp_response, DHCPError):
+                            logger.info(
+                                "No DHCP response sent on %s: Client: %s Error %s",
+                                dhcp_response.ifname,
+                                dhcp_response.client,
+                                dhcp_response.error,
+                            )
+                            continue
+                        try:
+                            # As per RFC 1542 Section 5.4:
+                            # In case the packet holds a non-zero ciaddr or giaddr,
+                            #   Reply should follow normal IP routing
+                            #   => Use udp socket to unicast
+                            # But 'ServerConfig.routing_disabled_with_rawsock' or
+                            # 'ServerConfig.routing_disabled_with_udpsock' overrides this behaviour
+                            # So, raw socket is used if routing_disabled_with_rawsock = True
+                            # or if both ciaddr and giaddr are zero
+
+                            # If gw_address is None, 'dhcp_response.data' is a
+                            # complete ethernet frame
+                            # Else, 'dhcp_response.data' is just dhcp hdr payload
+                            if gw_address is None:
+                                # The outgoing server intf could be different from
+                                # incoming server intf if client grouping is enabled
+                                if ifname != dhcp_response.server_iface:
+                                    ifcache_entry = (
+                                        ctrl.fetch_ifcache_by_ifname(
+                                            dhcp_response.server_iface
+                                        )
+                                        if dhcp_response.server_iface
+                                        else None
+                                    )
+                                    if not ifcache_entry:
+                                        logger.error(
+                                            "No server info found for server interface %s",
+                                            dhcp_response.server_iface,
+                                        )
+                                        continue
+                                if not ifcache_entry.rawsock:
+                                    logger.error(
+                                        "No socket info found for server interface %s",
+                                        dhcp_response.server_iface,
+                                    )
+                                    continue
+                                logger.debug(
+                                    "Unicasting DHCP reply over RAW socket: "
+                                    "Request Src Mac:%s Server Intf: %s",
+                                    src_mac,
+                                    dhcp_response.server_iface,
                                 )
+                                ifcache_entry.rawsock.send(dhcp_response.data)
                                 continue
-                            src_mac = Mac(eth.src)
-                            server_ip = ifcache_entry.ip
-                            if server_ip is None:
-                                logger.warning(
-                                    "Received DHCP packet on interface %s with no IP address",
-                                    ifname,
+                            # dhcp_response.data' is just dhcp hdr payload
+                            destination_ip, port = gw_address
+                            SOL_IP_PKTINFO = 8
+                            # If routing is disabled with udp socket,
+                            # specify the source interface for the reply
+                            if ServerConfig.routing_disabled_with_udpsock:
+                                # Non-zero intf idx and Non-default source IP used unlike
+                                # how the ip(7) linux documentation for IP_PKTINFO suggests
+                                if dhcp_response.server_iface is None:
+                                    logger.error(
+                                        "Routing disabled: No valid server interface configured "
+                                        "for client %s received on interface %s. No response sent",
+                                        src_mac,
+                                        ifname,
+                                    )
+                                    continue
+                                server_if_idx = (
+                                    ifcache_entry.idx
+                                    if ifname == dhcp_response.server_iface
+                                    else ctrl.get_ifidx(
+                                        dhcp_response.server_iface
+                                    )
                                 )
+                                if server_if_idx is None:
+                                    logger.error(
+                                        "Routing disabled: Failed to fetch if index for %s "
+                                        "No response sent for client %s for pkt on interface %s.",
+                                        dhcp_response.server_iface,
+                                        src_mac,
+                                        ifname,
+                                    )
+                                    continue
+
+                                logger.debug(
+                                    "Routing disabled: Unicast reply to %s through interface %s",
+                                    gw_address,
+                                    dhcp_response.server_iface,
+                                )
+                                pktinfo = pack(
+                                    "=I4s4s",
+                                    server_if_idx,
+                                    socket.inet_aton(
+                                        str(dhcp_response.server_id)
+                                    ),
+                                    socket.inet_aton(str(destination_ip)),
+                                )
+                            else:
+                                logger.debug(
+                                    "Routing enabled: Unicast reply to %s",
+                                    gw_address,
+                                )
+                                pktinfo = pack(
+                                    "=I4s4s",
+                                    0,
+                                    socket.inet_aton(
+                                        str(dhcp_response.server_id)
+                                    ),
+                                    socket.inet_aton(str(destination_ip)),
+                                )
+                            logger.debug(
+                                "Unicasting DHCP reply over UDP socket: "
+                                "Dst IP:%s Src IP:%s Request Src Mac: %s",
+                                destination_ip,
+                                dhcp_response.server_id,
+                                src_mac,
+                            )
+                            v4_tx_sock.sendmsg(
+                                [dhcp_response.data],
+                                [
+                                    (
+                                        socket.IPPROTO_IP,
+                                        SOL_IP_PKTINFO,
+                                        pktinfo,
+                                    )
+                                ],
+                                0,
+                                (str(destination_ip), port),
+                            )
+                            continue
+                        except OSError as err:
+                            logger.error(
+                                "Error %s sending packet on %s. "
+                                " Stop servicing the interface.",
+                                err,
+                                ifname,
+                            )
+                            ctrl.add_if_to_deactivate_list(ifname, True)
+                            continue
+
+                    # Case of IPv6 packet
+                    try:
+                        if len(udp.data) > 0:
+                            src_mac = Mac(eth.src)  # pylint: disable=no-member
                             if ifcache_entry.mac is None:
                                 logger.error(
                                     "No hardware address found on the interface %s.",
                                     ifname,
                                 )
                                 logger.error(
-                                    "Unable to process DHCP packet from %s",
+                                    "Unable to process DHCPv6 packet from %s",
                                     src_mac,
                                 )
                                 continue
 
+                            dhcp6_msg = Message(bytes(udp.data))
                             logger.debug(
-                                "Received DHCP packet on %s from %s",
+                                "Received DHCPv6 packet on %s from %s",
                                 ifname,
                                 src_mac,
                             )
 
-                            dhcp_response, gw_address = process_dhcp_packet(
+                            (
+                                dhcp6_response,
+                                direct_unicast_from_client,
+                            ) = process_dhcp6_packet(
                                 ifname,
-                                server_ip,
-                                src_mac,
-                                dh,
+                                dhcp6_msg,
                                 ifcache_entry.mac,
-                                routing_disabled_with_rawsock,
+                                Mac(rawmac),
                             )
-                            if isinstance(dhcp_response, DHCPError):
+                            if isinstance(dhcp6_response, DHCPError):
                                 logger.info(
-                                    "No DHCP response sent on %s: Client: %s Error %s",
-                                    dhcp_response.ifname,
-                                    dhcp_response.client,
-                                    dhcp_response.error,
+                                    "No DHCP6 response sent on %s. Client: %s Error: %s",
+                                    dhcp6_response.ifname,
+                                    dhcp6_response.client,
+                                    dhcp6_response.error,
                                 )
                                 continue
-                            try:
-                                # As per RFC 1542 Section 5.4:
-                                # In case the packet holds a non-zero ciaddr or giaddr,
-                                #   Reply should follow normal IP routing => Use udp socket to unicast
-                                # But 'routing_disabled_with_rawsock' or 'routing_disabled_with_udpsock'
-                                # configuration overrides this behaviour
-                                # So, raw socket is used if routing_disabled_with_rawsock = True
-                                # or if both ciaddr and giaddr are zero
-
-                                # If gw_address is None, 'dhcp_response.data' is a complete ethernet frame
-                                # Else, 'dhcp_response.data' is just dhcp hdr payload
-                                if gw_address is None:
-                                    # The outgoing server intf could be different from
-                                    # incoming server intf if client grouping is enabled
-                                    if ifname != dhcp_response.server_iface:
-                                        ifcache_entry = (
-                                            ctrl.fetch_ifcache_by_ifname(
-                                                dhcp_response.server_iface
-                                            )
-                                            if dhcp_response.server_iface
-                                            else None
-                                        )
-                                        if not ifcache_entry:
-                                            logger.error(
-                                                "No server info found for server interface %s",
-                                                dhcp_response.server_iface,
-                                            )
-                                            continue
-                                    if not ifcache_entry.rawsock:
-                                        logger.error(
-                                            "No socket info found for server interface %s",
-                                            dhcp_response.server_iface,
-                                        )
-                                        continue
-                                    logger.debug(
-                                        "Unicasting DHCP reply over RAW socket: "
-                                        "Request Src Mac:%s Server Intf: %s",
-                                        src_mac,
-                                        dhcp_response.server_iface,
-                                    )
-                                    ifcache_entry.rawsock.send(
-                                        dhcp_response.data
-                                    )
-                                    continue
-                                else:
-                                    destination_ip, port = gw_address
-                                    SOL_IP_PKTINFO = 8
-                                    # If routing is disabled with udp socket,
-                                    # specify the source interface for the reply
-                                    if routing_disabled_with_udpsock:
-                                        # Non-zero intf idx and Non-default source IP used unlike
-                                        # how the ip(7) linux documentation for IP_PKTINFO suggests
-                                        if dhcp_response.server_iface is None:
-                                            logger.error(
-                                                "Routing disabled: No valid server interface configured "
-                                                "for client %s received on interface %s. No response sent",
-                                                src_mac,
-                                                ifname,
-                                            )
-                                            continue
-                                        server_if_idx = (
-                                            ifcache_entry.idx
-                                            if ifname
-                                            == dhcp_response.server_iface
-                                            else ctrl.get_ifidx(
-                                                dhcp_response.server_iface
-                                            )
-                                        )
-                                        if server_if_idx is None:
-                                            logger.error(
-                                                "Routing disabled: Failed to fetch if index for %s "
-                                                "No response sent for client %s for pkt on interface %s.",
-                                                dhcp_response.server_iface,
-                                                src_mac,
-                                                ifname,
-                                            )
-                                            continue
-
-                                        logger.debug(
-                                            "Routing disabled: Unicast reply to %s through interface %s",
-                                            gw_address,
-                                            dhcp_response.server_iface,
-                                        )
-                                        pktinfo = pack(
-                                            "=I4s4s",
-                                            server_if_idx,
-                                            socket.inet_aton(
-                                                str(dhcp_response.server_id)
-                                            ),
-                                            socket.inet_aton(
-                                                str(destination_ip)
-                                            ),
-                                        )
-                                    else:
-                                        logger.debug(
-                                            "Routing enabled: Unicast reply to %s",
-                                            gw_address,
-                                        )
-                                        pktinfo = pack(
-                                            "=I4s4s",
-                                            0,
-                                            socket.inet_aton(
-                                                str(dhcp_response.server_id)
-                                            ),
-                                            socket.inet_aton(
-                                                str(destination_ip)
-                                            ),
-                                        )
-                                    logger.debug(
-                                        "Unicasting DHCP reply over UDP socket: "
-                                        "Dst IP:%s Src IP:%s Request Src Mac: %s",
-                                        destination_ip,
-                                        dhcp_response.server_id,
-                                        src_mac,
-                                    )
-                                    v4_tx_sock.sendmsg(
-                                        [dhcp_response.data],
-                                        [
-                                            (
-                                                socket.IPPROTO_IP,
-                                                SOL_IP_PKTINFO,
-                                                pktinfo,
-                                            )
-                                        ],
-                                        0,
-                                        (str(destination_ip), port),
-                                    )
-                                    continue
-                            except OSError as err:
-                                logger.error(
-                                    "Error %s sending packet on %s. "
-                                    " Stop servicing the interface.",
-                                    err,
+                            if dhcp6_response.data is None:
+                                logger.info(
+                                    "No DHCP6 response sent for packet on %s from %s",
                                     ifname,
-                                )
-                                ctrl.add_if_to_deactivate_list(ifname, True)
-                                continue
-
-                        # Case of IPv6 packet
-                        try:
-                            if len(udp.data) > 0:
-                                src_mac = Mac(eth.src)
-                                if ifcache_entry.mac is None:
-                                    logger.error(
-                                        "No hardware address found on the interface %s.",
-                                        ifname,
-                                    )
-                                    logger.error(
-                                        "Unable to process DHCPv6 packet from %s",
-                                        src_mac,
-                                    )
-                                    continue
-
-                                dhcp6_msg = Message(bytes(udp.data))
-                                logger.debug(
-                                    "Received DHCPv6 packet on %s from %s",
-                                    ifname,
-                                    src_mac,
-                                )
-
-                                (
-                                    dhcp6_response,
-                                    direct_unicast_from_client,
-                                ) = process_dhcp6_packet(
-                                    ifname,
-                                    dhcp6_msg,
-                                    ifcache_entry.mac,
                                     Mac(rawmac),
                                 )
-                                if isinstance(dhcp6_response, DHCPError):
-                                    logger.info(
-                                        "No DHCP6 response sent on %s. Client: %s Error: %s",
-                                        dhcp6_response.ifname,
-                                        dhcp6_response.client,
-                                        dhcp6_response.error,
-                                    )
-                                    continue
-                                if dhcp6_response.data is None:
-                                    logger.info(
-                                        "No DHCP6 response sent for packet on %s from %s",
-                                        ifname,
-                                        Mac(rawmac),
-                                    )
-                                    continue
-                                destination_ip6 = str(IPv6Address(ip.src))
-                                if direct_unicast_from_client:
-                                    logger.debug(
-                                        "Direct unicast from client: Unicast reply to %s through interface %s",
-                                        destination_ip6,
-                                        ifname,
-                                    )
-                                    pktinfo = pack(
-                                        "=16sI", bytes(0), ifcache_entry.idx
-                                    )
-                                    SOL_IP6_PKTINFO = 50
-                                    v6_tx_sock.sendmsg(
-                                        [dhcp6_response.data],
-                                        [
-                                            (
-                                                socket.IPPROTO_IPV6,
-                                                SOL_IP6_PKTINFO,
-                                                pktinfo,
-                                            )
-                                        ],
-                                        0,
-                                        (destination_ip6, udp.sport),
-                                    )
-                                else:
-                                    v6_tx_sock.sendto(
-                                        dhcp6_response.data,
-                                        (destination_ip6, udp.sport),
-                                    )
-                        except OSError as err:
-                            logger.error(
-                                "Error %s sending packet on %s. "
-                                "Stop servicing the interface.",
-                                err,
-                                ifname,
-                            )
-                            ctrl.add_if_to_deactivate_list(ifname, True)
-                            continue
+                                continue
+                            destination_ip6 = str(IPv6Address(ip.src))
+                            if direct_unicast_from_client:
+                                logger.debug(
+                                    "Direct unicast from client: "
+                                    "Unicast reply to %s through interface %s",
+                                    destination_ip6,
+                                    ifname,
+                                )
+                                pktinfo = pack(
+                                    "=16sI", bytes(0), ifcache_entry.idx
+                                )
+                                SOL_IP6_PKTINFO = 50
+                                v6_tx_sock.sendmsg(
+                                    [dhcp6_response.data],
+                                    [
+                                        (
+                                            socket.IPPROTO_IPV6,
+                                            SOL_IP6_PKTINFO,
+                                            pktinfo,
+                                        )
+                                    ],
+                                    0,
+                                    (destination_ip6, udp.sport),
+                                )
+                            else:
+                                v6_tx_sock.sendto(
+                                    dhcp6_response.data,
+                                    (destination_ip6, udp.sport),
+                                )
+                    except OSError as err:
+                        logger.error(
+                            "Error %s sending packet on %s. "
+                            "Stop servicing the interface.",
+                            err,
+                            ifname,
+                        )
+                        ctrl.add_if_to_deactivate_list(ifname, True)
+                        continue
             ctrl.sanitise_pollset_and_ifcache()
 
     except KeyboardInterrupt:
-        exit()
+        db_exit()
         del ctrl.ifcache
         if "v4_tx_sock" in locals() and v4_tx_sock:
             v4_tx_sock.close()

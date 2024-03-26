@@ -56,7 +56,7 @@ if __name__ == "__main__":
     config = configparser.ConfigParser()
 
     # Load default configuration
-    statichcpd_config: Dict[str, Any] = dict()
+    statichcpd_config: Dict[str, Any] = {}
     config.read(config_file)
     statichcpd_config.update(config["statichcpd"])
 

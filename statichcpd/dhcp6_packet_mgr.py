@@ -1,41 +1,111 @@
 #!/usr/bin/env python3
 
+# pylint: disable=too-many-lines
 
-import socket
 import struct
 import binascii
 from typing import Any, List, Tuple, Union, Optional, Dict, cast, Iterable
 from ipaddress import IPv6Address, IPv6Network, AddressValueError
-from configparser import SectionProxy
 from enum import Enum
 from dpkt.compat import compat_ord
-from .datatypes import *
-from .database_manager import *
+from .datatypes import Mac, Int16, Int32, DHCPError, DHCP6Response
+from .database_manager import (
+    fetch_host_conf_data,
+    DHCPv6DB,
+    DHCP6_NON_DEFAULT_T1,
+    DHCP6_NON_DEFAULT_T2,
+    DHCP6_NON_DEFAULT_PREF_LIFETIME,
+    DHCP6_NON_DEFAULT_VALID_LIFETIME,
+)
 from .logmgr import logger
-from .dhcp6 import *
+from .dhcp6 import (
+    Message,
+    SOLICIT,
+    CONFIRM,
+    REBIND,
+    RENEW,
+    REQUEST,
+    DECLINE,
+    RELEASE,
+    fetch_dhcp6_opt,
+    DHCP6_NoBinding,
+    DHCP6_OPT_CLIENTID,
+    DHCP6_OPT_SERVERID,
+    DHCP6_OPT_IA_NA,
+    DHCP6_OPT_IA_TA,
+    DHCP6_NoAddrsAvail,
+    DHCP6_OPT_STATUS_CODE,
+    DHCP6_OPT_IAADDR,
+    DHCP6_OPT_IA_PD,
+    DHCP6_OPT_IAPREFIX,
+    DHCP6_OPT_RAPID_COMMIT,
+    DHCP6_NotOnLink,
+    INFORMATIONREQUEST,
+    DHCP6_OPT_RELAY_MSG,
+    RELAYREPL,
+    dhcp6_type_to_str,
+    fetch_all_dhcp6_opt,
+    DHCP6_OPT_UNICAST,
+    REPLY,
+    ADVERTISE,
+    DHCP6_OPT_ORO,
+    DHCP6_Success,
+    RELAYFORW,
+)
 from .utils import strtobool
 
-use_mac_as_duid = False
-disable_ia_id = False
 
-DEFAULT_IAADDR_LEN = 24
-DEFAULT_IAPD_LEN = 25
+class V6Config:  # pylint: disable=too-many-instance-attributes,too-many-arguments
+    use_mac_as_duid: bool = False
+    disable_ia_id: bool = False
+    default_t1: int = 0
+    default_t2: int = 0
+    default_pref_lifetime: int = 0
+    default_valid_lifetime: int = 0
+    default_iaaddr_len: int = 0
+    default_iapd_len: int = 0
 
-default_t1 = 0
-default_t2 = 0
-default_pref_lifetime = 0
-default_valid_lifetime = 0
+    @classmethod
+    def init(
+        cls,
+        mac_as_duid: bool,
+        disable_ia_id: bool,
+        t1: int,
+        t2: int,
+        pref_lifetime: int,
+        valid_lifetime: int,
+        iaaddr_len: int,
+        iapd_len: int,
+    ) -> None:
+        cls.use_mac_as_duid = mac_as_duid
+        cls.disable_ia_id = disable_ia_id
+        cls.default_t1 = t1
+        cls.default_t2 = t2
+        cls.default_pref_lifetime = pref_lifetime
+        cls.default_valid_lifetime = valid_lifetime
+        cls.default_iaaddr_len = iaaddr_len
+        cls.default_iapd_len = iapd_len
 
 
 def init(config: Dict[str, Any]) -> None:
-    global use_mac_as_duid, disable_ia_id
-    global default_t1, default_t2, default_pref_lifetime, default_valid_lifetime
-    use_mac_as_duid = strtobool(config.get("use_mac_as_client_duid", "False"))
+    mac_as_duid = strtobool(config.get("use_mac_as_client_duid", "False"))
     disable_ia_id = strtobool(config.get("disable_ia_id", "False"))
-    default_t1 = int(config.get("default_renew_time", 1000))
-    default_t2 = int(config.get("default_rebind_time", 2000))
-    default_pref_lifetime = int(config.get("default_pref_lifetime", 3000))
-    default_valid_lifetime = int(config.get("default_valid_lifetime", 4000))
+    t1 = int(config.get("default_renew_time", 1000))
+    t2 = int(config.get("default_rebind_time", 2000))
+    pref_lifetime = int(config.get("default_pref_lifetime", 3000))
+    valid_lifetime = int(config.get("default_valid_lifetime", 4000))
+    iaaddr_len = 24
+    iapd_len = 25
+    V6Config.init(
+        mac_as_duid,
+        disable_ia_id,
+        t1,
+        t2,
+        pref_lifetime,
+        valid_lifetime,
+        iaaddr_len,
+        iapd_len,
+    )
 
 
 # Message Validation: RFC 3315 Section 15
@@ -47,13 +117,13 @@ def validate_msg(msg: Message.ClientServerDHCP6, server_duid: bytes) -> bool:
             fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID) is not None
             and fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) is None
         )
-    elif msg.mtype in [REQUEST, RENEW, DECLINE, RELEASE]:
+    if msg.mtype in [REQUEST, RENEW, DECLINE, RELEASE]:
         return (
             fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) is not None
             and fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID) is not None
             and fetch_dhcp6_opt(msg, DHCP6_OPT_SERVERID) == server_duid
         )
-    elif msg.mtype == INFORMATIONREQUEST:
+    if msg.mtype == INFORMATIONREQUEST:
         return (
             fetch_dhcp6_opt(msg, DHCP6_OPT_IA_NA) is None
             and fetch_dhcp6_opt(msg, DHCP6_OPT_IA_TA) is None
@@ -66,7 +136,7 @@ def validate_msg(msg: Message.ClientServerDHCP6, server_duid: bytes) -> bool:
 
 
 def ll_addr(address: bytes) -> str:
-    return "".join("%02x" % compat_ord(b) for b in address)
+    return "".join(f"{compat_ord(b):02x}" for b in address)
 
 
 class DUID(Enum):
@@ -84,8 +154,10 @@ def construct_dhcp6_packet(
         return Message.ClientServerDHCP6(
             mtype=msg_type, xid=msg.xid, opts=opt_list
         )
+    return None
 
 
+# pylint: disable=too-many-locals, too-many-branches, too-many-statements
 def construct_ia_na_response_data(
     msg: Message.ClientServerDHCP6,
     conf_data: List[Union[IPv6Address, Tuple[str, IPv6Address]]],
@@ -116,7 +188,7 @@ def construct_ia_na_response_data(
             conf_data,
         )
         configured_addr6_list: List[IPv6Address]
-        if disable_ia_id:
+        if V6Config.disable_ia_id:
             # Ignore IAID values and return all addresses associated with this client
             # When disable_ia_id is set, conf_data is expected to be List[IPv6Address]
             if not all(isinstance(ele, IPv6Address) for ele in conf_data):
@@ -160,8 +232,8 @@ def construct_ia_na_response_data(
 
         (t1, t2) = struct.unpack(">ii", requested_na[4:12])
         if (t1 == t2 and t1 == 0) or t1 > t2:
-            t1 = default_t1
-            t2 = default_t2
+            t1 = V6Config.default_t1
+            t2 = V6Config.default_t2
 
         if DHCP6_NON_DEFAULT_T1 in host_data:
             t1 = host_data[DHCP6_NON_DEFAULT_T1].value
@@ -218,8 +290,10 @@ def construct_ia_na_response_data(
                 ifname,
                 requested_addr_list,
             )
-            # For request msgs, if the IA address mentioned in client request is different from what we have
-            # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
+            # For request msgs, if the IA address mentioned in
+            # client request is different from what we have configured,
+            # send back the old one with lifeftime 0 and
+            # new one with a valid lifetime
             expired_addresses = [
                 addr
                 for addr in requested_addr_list
@@ -237,7 +311,7 @@ def construct_ia_na_response_data(
             for addr in expired_addresses:
                 pref_lifetime = 0
                 valid_lifetime = 0
-                iaddr_length = DEFAULT_IAADDR_LEN
+                iaddr_length = V6Config.default_iaaddr_len
                 encoded_value += (
                     struct.pack(">HH", DHCP6_OPT_IAADDR, iaddr_length)
                     + addr.packed
@@ -245,9 +319,9 @@ def construct_ia_na_response_data(
                     + valid_lifetime.to_bytes(4, "big")
                 )
 
-        iaddr_length = DEFAULT_IAADDR_LEN
-        pref_lifetime = default_pref_lifetime
-        valid_lifetime = default_valid_lifetime
+        iaddr_length = V6Config.default_iaaddr_len
+        pref_lifetime = V6Config.default_pref_lifetime
+        valid_lifetime = V6Config.default_valid_lifetime
         if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
             pref_lifetime = host_data[DHCP6_NON_DEFAULT_PREF_LIFETIME].value
         if DHCP6_NON_DEFAULT_VALID_LIFETIME in host_data:
@@ -265,6 +339,7 @@ def construct_ia_na_response_data(
     return encoded_value
 
 
+# pylint: disable=too-many-branches
 def construct_ia_ta_response_data(
     msg: Message.ClientServerDHCP6,
     conf_data: List[Union[IPv6Address, Tuple[str, IPv6Address]]],
@@ -282,7 +357,7 @@ def construct_ia_ta_response_data(
     for requested_ta in ia_ta_opts:
         requested_id = hex(struct.unpack(">I", requested_ta[:4])[0])
         configured_addr6_list: List[IPv6Address]
-        if disable_ia_id:
+        if V6Config.disable_ia_id:
             # Ignore IAID values and return all addresses associated with this client
             # When disable_ia_id is set, conf_data is expected to be List[IPv6Address]
             if not all(isinstance(ele, IPv6Address) for ele in conf_data):
@@ -369,8 +444,9 @@ def construct_ia_ta_response_data(
                 ifname,
                 requested_addr_list,
             )
-            # For request msgs, if the IA address mentioned in client request is different from what we have
-            # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
+            # For request msgs, if the IA address mentioned in client request
+            # is different from what we have configured, send back the old one
+            # with lifeftime 0 and new one with a valid lifetime
             expired_addresses = [
                 addr
                 for addr in requested_addr_list
@@ -388,7 +464,7 @@ def construct_ia_ta_response_data(
             for addr in expired_addresses:
                 pref_lifetime = 0
                 valid_lifetime = 0
-                iaddr_length = DEFAULT_IAADDR_LEN
+                iaddr_length = V6Config.default_iaaddr_len
                 encoded_value += (
                     struct.pack(">HH", DHCP6_OPT_IAADDR, iaddr_length)
                     + addr.packed
@@ -396,9 +472,9 @@ def construct_ia_ta_response_data(
                     + valid_lifetime.to_bytes(4, "big")
                 )
 
-        pref_lifetime = default_pref_lifetime
-        valid_lifetime = default_valid_lifetime
-        iaddr_length = DEFAULT_IAADDR_LEN
+        pref_lifetime = V6Config.default_pref_lifetime
+        valid_lifetime = V6Config.default_valid_lifetime
+        iaddr_length = V6Config.default_iaaddr_len
 
         if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
             pref_lifetime = host_data[DHCP6_NON_DEFAULT_PREF_LIFETIME].value
@@ -417,6 +493,7 @@ def construct_ia_ta_response_data(
     return encoded_value
 
 
+# pylint: disable=too-many-locals, too-many-branches, too-many-statements
 def construct_ia_pd_response_data(
     msg: Message.ClientServerDHCP6,
     conf_data: List[Union[IPv6Network, Tuple[str, IPv6Network]]],
@@ -447,7 +524,7 @@ def construct_ia_pd_response_data(
             conf_data,
         )
         configured_pd_list: List[IPv6Network]
-        if disable_ia_id:
+        if V6Config.disable_ia_id:
             # Ignore IAID values and return all addresses associated with this client
             # When disable_ia_id is set, conf_data is expected to be List[IPv6Network]
             if not all(isinstance(ele, IPv6Network) for ele in conf_data):
@@ -491,8 +568,8 @@ def construct_ia_pd_response_data(
 
         (t1, t2) = struct.unpack(">ii", requested_pd[4:12])
         if (t1 == t2 and t1 == 0) or t1 > t2:
-            t1 = default_t1
-            t2 = default_t2
+            t1 = V6Config.default_t1
+            t2 = V6Config.default_t2
 
         if DHCP6_NON_DEFAULT_T1 in host_data:
             t1 = host_data[DHCP6_NON_DEFAULT_T1].value
@@ -520,7 +597,9 @@ def construct_ia_pd_response_data(
                 op = struct.unpack(">H", requested_pd[offset : offset + 2])[0]
                 if op == DHCP6_OPT_IAPREFIX:
                     try:
-                        # IAPREFIX structure: Opcode(2) + Length(2) + PreferredLife(4) + ValidLife(4) + PrefixLen(1) + Addr(16)
+                        # IAPREFIX structure: Opcode(2) + Length(2)
+                        #                    + PreferredLife(4) + ValidLife(4)
+                        #                    + PrefixLen(1) + Addr(16)
                         prefix_len = str(
                             struct.unpack(
                                 ">B", requested_pd[offset + 12 : offset + 13]
@@ -556,8 +635,9 @@ def construct_ia_pd_response_data(
                 ifname,
                 requested_pd_list,
             )
-            # For request msgs, if the IA address mentioned in client request is different from what we have
-            # configured, send back the old one with lifeftime 0 and new one with a valid lifetime
+            # For request msgs, if the IA address mentioned in client request
+            # is different from what we have configured, send back the old one
+            # with lifeftime 0 and new one with a valid lifetime
             expired_prefixes = [
                 prefix
                 for prefix in requested_pd_list
@@ -575,7 +655,7 @@ def construct_ia_pd_response_data(
             for prefix in expired_prefixes:
                 pref_lifetime = 0
                 valid_lifetime = 0
-                iapd_length = DEFAULT_IAPD_LEN
+                iapd_length = V6Config.default_iapd_len
                 encoded_value += (
                     struct.pack(">HH", DHCP6_OPT_IAPREFIX, iapd_length)
                     + pref_lifetime.to_bytes(4, "big")
@@ -584,9 +664,9 @@ def construct_ia_pd_response_data(
                     + prefix.network_address.packed
                 )
 
-        pref_lifetime = default_pref_lifetime
-        valid_lifetime = default_valid_lifetime
-        iapd_length = DEFAULT_IAPD_LEN
+        pref_lifetime = V6Config.default_pref_lifetime
+        valid_lifetime = V6Config.default_valid_lifetime
+        iapd_length = V6Config.default_iapd_len
 
         if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
             pref_lifetime = host_data[DHCP6_NON_DEFAULT_PREF_LIFETIME].value
@@ -620,12 +700,8 @@ def append_mandatory_options(
     # Add support for server preference and reconfigure
     # The server preference value MUST default to zero unless otherwise
     # configured by the server administrator.
-    # If the Relay-forward messages included an Interface-id option, the server copies that
-    # option to the Relay-reply message.
-    # opt_list.extend([(DHCP6_OPT_SERVERID, struct.pack(">HH%is"%(len(server_duid[2:])/2),
-    #                                                            int(server_duid[0]),
-    #                                                            int(server_duid[1]),
-    #                                                            binascii.unhexlify(server_duid[2:]))), # Find a proper encoding of duid
+    # If the Relay-forward messages included an Interface-id option,
+    # the server copies that option to the Relay-reply message.
     if client_duid is not None:  # To satisfy mypy
         opt_list.extend(
             [
@@ -644,7 +720,7 @@ def construct_dhcp6_opt_list(
     client_id: Union[Mac, str],
 ) -> Tuple[Tuple[int, bytes], ...]:
     opt_list: List[Tuple[int, Any]] = []
-    if request_list_opt == None:
+    if request_list_opt is None:
         logger.debug(
             "Client:%s Ifname:%s No parameter request list", client_id, ifname
         )
@@ -820,13 +896,13 @@ def fetch_client_duid(client_duid: Optional[bytes]) -> str:
             + "".join(
                 str(elem)
                 for elem in struct.unpack(
-                    ">%iH" % (len(client_duid[2:6]) / 2), client_duid[2:6]
+                    f">{int(len(client_duid[2:6]) / 2)}H", client_duid[2:6]
                 )
             )
             + "".join(
                 str(elem)
                 for elem in struct.unpack(
-                    ">%iH" % (len(client_duid[6:]) / 2), client_duid[6:]
+                    f">{int(len(client_duid[6:]) / 2)}H", client_duid[6:]
                 )
             )
         )
@@ -844,7 +920,7 @@ def process_solicit_msg(
     request_list_opts = (
         list(
             struct.unpack(
-                ">%iH" % (len(request_list_bytestr) / 2), request_list_bytestr
+                f">{int(len(request_list_bytestr) / 2)}H", request_list_bytestr
             )
         )
         if request_list_bytestr is not None
@@ -853,7 +929,7 @@ def process_solicit_msg(
     client_duid = fetch_dhcp6_opt(msg, DHCP6_OPT_CLIENTID)
 
     client_id: Union[Mac, str]
-    if use_mac_as_duid:
+    if V6Config.use_mac_as_duid:
         client_id = src_mac
     else:
         client_id = fetch_client_duid(client_duid)
@@ -868,7 +944,7 @@ def process_solicit_msg(
     )
     if not host_conf_data:
         return DHCPError(
-            error=f"No configuration data found",
+            error="No configuration data found",
             ifname=ifname,
             client=client_id,
         )
@@ -896,7 +972,7 @@ def process_solicit_msg(
         return DHCPError(
             client=client_id,
             ifname=ifname,
-            error=f"Constructing response to DHCP6 Advertise failed",
+            error="Constructing response to DHCP6 Advertise failed",
         )
     return DHCP6Response(data=bytes(dhcp_response), server_iface=server_iface)
 
@@ -914,7 +990,7 @@ def process_request_renew_rebind_info_msg(
     request_list_opts = (
         list(
             struct.unpack(
-                ">%iH" % (len(request_list_bytestr) / 2), request_list_bytestr
+                f">{int(len(request_list_bytestr) / 2)}H", request_list_bytestr
             )
         )
         if request_list_bytestr is not None
@@ -922,7 +998,7 @@ def process_request_renew_rebind_info_msg(
     )
 
     client_id: Union[Mac, str]
-    if use_mac_as_duid:
+    if V6Config.use_mac_as_duid:
         client_id = src_mac
     else:
         client_id = fetch_client_duid(client_duid)
@@ -934,7 +1010,7 @@ def process_request_renew_rebind_info_msg(
         DHCPError(
             client=client_id,
             ifname=ifname,
-            error=f"No configuration data found for the host",
+            error="No configuration data found for the host",
         )
 
     dhcp_response = construct_dhcp_reply(
@@ -961,7 +1037,7 @@ def process_confirm_msg(
     #       send back Status code UseMulticast
 
     client_id: Union[Mac, str]
-    if use_mac_as_duid:
+    if V6Config.use_mac_as_duid:
         client_id = src_mac
     else:
         client_id = fetch_client_duid(client_duid)
@@ -973,7 +1049,7 @@ def process_confirm_msg(
         return DHCPError(
             client=client_id,
             ifname=ifname,
-            error=f" No configuration data found for the host",
+            error=" No configuration data found for the host",
         )
 
     encoded_ia_na: Optional[bytes] = b""
@@ -1073,7 +1149,7 @@ def process_relayforw_msg(
     dhcp_msg = fetch_dhcp6_opt(payload, DHCP6_OPT_RELAY_MSG)
     if dhcp_msg is None:
         return DHCPError(
-            error=f"Empty DHCP Message in DHCP Relay Forward msg",
+            error="Empty DHCP Message in DHCP Relay Forward msg",
             client=src_mac,
             ifname=ifname,
         )
@@ -1084,7 +1160,7 @@ def process_relayforw_msg(
         return response
     if response.data is None:
         return DHCPError(
-            error=f"Empty DHCP Message in DHCP Relay Reply",
+            error="Empty DHCP Message in DHCP Relay Reply",
             client=src_mac,
             ifname=ifname,
         )
@@ -1117,9 +1193,12 @@ def process_relay_server_msg(
             client=src_mac,
             ifname=ifname,
         )
-    if use_mac_as_duid:
+    if V6Config.use_mac_as_duid:
         return DHCPError(
-            error=f"Server configured to use source mac as client DUID. Unable to handle {dhcp6_type_to_str(payload.mtype)}",
+            error=(
+                "Server configured to use source mac as client DUID."
+                f"Unable to handle {dhcp6_type_to_str(payload.mtype)}"
+            ),
             client=src_mac,
             ifname=ifname,
         )
@@ -1146,7 +1225,10 @@ def process_dhcp6_packet(
     else:
         return (
             DHCPError(
-                error=f"Malformed packet with unknown DHCP msg type {type(payload)}",
+                error=(
+                    "Malformed packet with"
+                    f"unknown DHCP msg type {type(payload)}"
+                ),
                 ifname=ifname,
                 client=src_mac,
             ),
