@@ -11,6 +11,9 @@ from dpkt import dhcp
 from .datatypes import Int16, Int32, Mac, Staticrt
 from .logmgr import logger
 
+# Import all dhcp6 opcodes, which is used in populating valid attributes table
+from .dhcp6 import *  # pylint: disable=wildcard-import,unused-wildcard-import
+
 
 __all__ = [
     "schema",
@@ -328,7 +331,7 @@ def populate_table_from(table_name: str, csv_filename: str) -> None:
 
         for row in reader:
             # Opcode can be an integer or dpkt.dhcp module optcode alias
-            optype = getattr(dtype, row[2], None)
+            optype = getattr(dtype, row[2].rstrip(), None)
             if optype is None:
                 continue
             try:
