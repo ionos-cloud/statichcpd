@@ -674,9 +674,11 @@ def process_dhcp_packet(  # pylint: disable = too-many-return-statements
     if response.data is None or response.daddr is None:
         return (
             DHCPError(
-                error="Empty DHCP response"
-                if response.data is None
-                else "Invalid destination address",
+                error=(
+                    "Empty DHCP response"
+                    if response.data is None
+                    else "Invalid destination address"
+                ),
                 ifname=ifname,
                 client=None,
             ),

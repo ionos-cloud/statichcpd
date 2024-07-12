@@ -872,12 +872,11 @@ def start_server() -> None:
                             continue
                         except OSError as err:
                             logger.error(
-                                "Error %s sending packet on %s. "
-                                " Stop servicing the interface.",
+                                "%s: Error sending DHCPv4 reply on %s to %s ",
                                 err,
                                 ifname,
+                                destination_ip,
                             )
-                            ctrl.add_if_to_deactivate_list(ifname, True)
                             continue
 
                     # Case of IPv6 packet
@@ -957,12 +956,11 @@ def start_server() -> None:
                                 )
                     except OSError as err:
                         logger.error(
-                            "Error %s sending packet on %s. "
-                            "Stop servicing the interface.",
+                            "%s: Error sending DHCPv6 reply on %s to %s ",
                             err,
                             ifname,
+                            destination_ip6,
                         )
-                        ctrl.add_if_to_deactivate_list(ifname, True)
                         continue
             ctrl.sanitise_pollset_and_ifcache()
 
