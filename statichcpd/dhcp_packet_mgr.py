@@ -254,6 +254,9 @@ def construct_dhcp_offer(
     opt_list = append_mandatory_options(
         dhcp_obj, opt_list, dhcp.DHCPOFFER, server_id
     )
+    logger.info(
+        "DHCPv4: Client: %s DHCP Offer for IP %s", dhcp_obj.chaddr, offer_ip
+    )
     return construct_dhcp_packet(dhcp_obj, offer_ip, opt_list)
 
 
@@ -269,6 +272,9 @@ def construct_dhcp_nak(
     opt_list = append_mandatory_options(
         dhcp_obj, opt_list, dhcp.DHCPNAK, server_id
     )
+    logger.info(
+        "DHCPv4: Client: %s DHCP NAK for IP %s", dhcp_obj.chaddr, requested_ip
+    )
     return construct_dhcp_packet(dhcp_obj, requested_ip, opt_list)
 
 
@@ -283,6 +289,9 @@ def construct_dhcp_ack(
     opt_list = construct_dhcp_opt_list(request_list_opt, host_conf_data)
     opt_list = append_mandatory_options(
         dhcp_obj, opt_list, dhcp.DHCPACK, server_id
+    )
+    logger.info(
+        "DHCPv4: Client: %s DHCP ACK for IP %s", dhcp_obj.chaddr, client_ip
     )
     return construct_dhcp_packet(dhcp_obj, client_ip, opt_list)
 

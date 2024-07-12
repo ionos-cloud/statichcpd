@@ -171,6 +171,7 @@ def construct_ia_na_response_data(
     if conf_data is None:
         return None
     encoded_value = b""
+    offered_addr6_list: List[IPv6Address] = []
 
     # For each requested IA_NA option, find a corresponding configuration with that IA_ID
     for requested_na in ia_na_opts:
@@ -335,6 +336,12 @@ def construct_ia_na_response_data(
                 + valid_lifetime.to_bytes(4, "big")
             )
             # TODO: Any possible IAADDR options to be added??
+        offered_addr6_list += configured_addr6_list
+    logger.info(
+        "DHCPv6: Client: %s IA_NA addresses offered: %s",
+        client_id,
+        offered_addr6_list,
+    )
 
     return encoded_value
 
@@ -351,6 +358,7 @@ def construct_ia_ta_response_data(
         msg, DHCP6_OPT_IA_TA
     )  # There could be multiple IA_NA options
     encoded_value = b""
+    offered_addr6_list: List[IPv6Address] = []
     if conf_data is None:
         return None
     # For each requested IA_TA option, find a corresponding configuration with that IA_ID
@@ -489,6 +497,12 @@ def construct_ia_ta_response_data(
                 + valid_lifetime.to_bytes(4, "big")
             )
             # TODO: Any possible IAADDR options to be added??
+        offered_addr6_list += configured_addr6_list
+    logger.info(
+        "DHCPv6: Client: %s IA_TA addresses offered: %s",
+        client_id,
+        offered_addr6_list,
+    )
 
     return encoded_value
 
@@ -507,6 +521,7 @@ def construct_ia_pd_response_data(
     if conf_data is None:
         return None
     encoded_value = b""
+    offered_pd_list: List[IPv6Network] = []
 
     # For each requested IA_PD option, find a corresponding configuration with that IA_ID
     for requested_pd in ia_pd_opts:
@@ -682,6 +697,12 @@ def construct_ia_pd_response_data(
                 + prefix.network_address.packed
             )
             # TODO: Any possible IAADDR options to be added??
+        offered_pd_list += configured_pd_list
+    logger.info(
+        "DHCPv6: Client: %s IA_PD addresses offered: %s",
+        client_id,
+        offered_pd_list,
+    )
 
     return encoded_value
 

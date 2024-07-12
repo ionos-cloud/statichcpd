@@ -716,19 +716,18 @@ def start_server() -> None:
                             )
                         if ifcache_entry.mac is None:
                             logger.error(
-                                "No hardware address found on the interface %s.",
-                                ifname,
-                            )
-                            logger.error(
-                                "Unable to process DHCP packet from %s",
+                                "DHCPv4: Client: %s Interface: %s "
+                                "Status: Failed (No hardware address "
+                                "found on the interface)",
                                 src_mac,
+                                ifname,
                             )
                             continue
 
                         logger.debug(
-                            "Received DHCP packet on %s from %s",
-                            ifname,
+                            "DHCPv4: Client: %s Interface: %s  Received DHCPv4 packet",
                             src_mac,
+                            ifname,
                         )
 
                         dhcp_response, gw_address = process_dhcp_packet(
@@ -741,9 +740,9 @@ def start_server() -> None:
                         )
                         if isinstance(dhcp_response, DHCPError):
                             logger.info(
-                                "No DHCP response sent on %s: Client: %s Error %s",
-                                dhcp_response.ifname,
+                                "DHCPv4: Client: %s Interface: %s Status: Failed (%s)",
                                 dhcp_response.client,
+                                dhcp_response.ifname,
                                 dhcp_response.error,
                             )
                             continue
@@ -773,13 +772,19 @@ def start_server() -> None:
                                     )
                                     if not ifcache_entry:
                                         logger.error(
-                                            "No server info found for server interface %s",
+                                            "DHCPv4: Client: %s Interface: %s "
+                                            "Status: Failed (No server info found for %s)",
+                                            src_mac,
+                                            ifname,
                                             dhcp_response.server_iface,
                                         )
                                         continue
                                 if not ifcache_entry.rawsock:
                                     logger.error(
-                                        "No socket info found for server interface %s",
+                                        "DHCPv4: Client: %s Interface: %s "
+                                        "Status: Failed (No socket info for %s)",
+                                        src_mac,
+                                        ifname,
                                         dhcp_response.server_iface,
                                     )
                                     continue
@@ -801,8 +806,9 @@ def start_server() -> None:
                                 # how the ip(7) linux documentation for IP_PKTINFO suggests
                                 if dhcp_response.server_iface is None:
                                     logger.error(
-                                        "Routing disabled: No valid server interface configured "
-                                        "for client %s received on interface %s. No response sent",
+                                        "DHCPv4: Client: %s Interface: %s "
+                                        "Status: Failed (Routing disabled: "
+                                        "No valid server interface configured)",
                                         src_mac,
                                         ifname,
                                     )
@@ -816,11 +822,12 @@ def start_server() -> None:
                                 )
                                 if server_if_idx is None:
                                     logger.error(
-                                        "Routing disabled: Failed to fetch if index for %s "
-                                        "No response sent for client %s for pkt on interface %s.",
-                                        dhcp_response.server_iface,
+                                        "DHCPv4: Client: %s Interface: %s "
+                                        "Status: Failed (Routing disabled: "
+                                        "Failed to fetch ifindex for %s)",
                                         src_mac,
                                         ifname,
+                                        dhcp_response.server_iface,
                                     )
                                     continue
 
@@ -850,13 +857,6 @@ def start_server() -> None:
                                     ),
                                     socket.inet_aton(str(destination_ip)),
                                 )
-                            logger.debug(
-                                "Unicasting DHCP reply over UDP socket: "
-                                "Dst IP:%s Src IP:%s Request Src Mac: %s",
-                                destination_ip,
-                                dhcp_response.server_id,
-                                src_mac,
-                            )
                             v4_tx_sock.sendmsg(
                                 [dhcp_response.data],
                                 [
@@ -869,12 +869,22 @@ def start_server() -> None:
                                 0,
                                 (str(destination_ip), port),
                             )
+                            logger.info(
+                                "DHCPv4: Client: %s Interface: %s "
+                                "Status: Success (Unicast DHCP reply from %s to %s)",
+                                src_mac,
+                                ifname,
+                                dhcp_response.server_id,
+                                destination_ip,
+                            )
                             continue
                         except OSError as err:
                             logger.error(
-                                "%s: Error sending DHCPv4 reply on %s to %s ",
-                                err,
+                                "DHCPv4: Client: %s Interface: %s "
+                                "Status: Failed (%s on sending reply to %s)",
+                                src_mac,
                                 ifname,
+                                err,
                                 destination_ip,
                             )
                             continue
@@ -885,12 +895,11 @@ def start_server() -> None:
                             src_mac = Mac(eth.src)  # pylint: disable=no-member
                             if ifcache_entry.mac is None:
                                 logger.error(
-                                    "No hardware address found on the interface %s.",
-                                    ifname,
-                                )
-                                logger.error(
-                                    "Unable to process DHCPv6 packet from %s",
+                                    "DHCPv6: Client: %s Interface: %s "
+                                    "Status: Failed (No hardware address "
+                                    "found on the interface)",
                                     src_mac,
+                                    ifname,
                                 )
                                 continue
 
@@ -912,17 +921,18 @@ def start_server() -> None:
                             )
                             if isinstance(dhcp6_response, DHCPError):
                                 logger.info(
-                                    "No DHCP6 response sent on %s. Client: %s Error: %s",
-                                    dhcp6_response.ifname,
+                                    "DHCPv6: Client: %s Interface: %s Status: Failed (%s)",
                                     dhcp6_response.client,
+                                    dhcp6_response.ifname,
                                     dhcp6_response.error,
                                 )
                                 continue
                             if dhcp6_response.data is None:
                                 logger.info(
-                                    "No DHCP6 response sent for packet on %s from %s",
-                                    ifname,
+                                    "DHCPv6: Client: %s Interface: %s "
+                                    "Status: Failed (No response data)",
                                     Mac(rawmac),
+                                    ifname,
                                 )
                                 continue
                             destination_ip6 = str(IPv6Address(ip.src))
@@ -954,11 +964,17 @@ def start_server() -> None:
                                     dhcp6_response.data,
                                     (destination_ip6, udp.sport),
                                 )
+                            logger.debug(
+                                "DHCPv6: Client:%s Interface: %s Status: Success",
+                                Mac(rawmac),
+                                ifname,
+                            )
                     except OSError as err:
                         logger.error(
-                            "%s: Error sending DHCPv6 reply on %s to %s ",
-                            err,
+                            "DHCPv6: Client:%s Interface: %s Status: Failed (%s sending to %s)",
+                            Mac(rawmac),
                             ifname,
+                            err,
                             destination_ip6,
                         )
                         continue
