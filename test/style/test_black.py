@@ -6,7 +6,7 @@ import unittest
 import re
 from pkg_resources import get_distribution, DistributionNotFound
 
-from .. import no_less_than
+from .. import between
 
 black_version = "0.0"
 try:
@@ -19,8 +19,8 @@ except DistributionNotFound:
 
 class BlackFormatter(unittest.TestCase):
     @unittest.skipUnless(
-        no_less_than("21.1")(black_version),
-        "Do not trust earlier black versions",
+        between("21.1", "24")(black_version),
+        "Do not trust earlier or later black versions",
     )
     def test_black(self):
         if not shutil.which("black"):
