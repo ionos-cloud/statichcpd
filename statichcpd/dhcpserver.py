@@ -711,7 +711,9 @@ def start_server() -> None:
                         server_ip = ifcache_entry.ip
                         if server_ip is None:
                             logger.warning(
-                                "Received DHCP packet on interface %s with no IP address",
+                                "DHCPv4: Client: %s Interface: %s : "
+                                "No cached IP address for server",
+                                src_mac,
                                 ifname,
                             )
                         if ifcache_entry.mac is None:
@@ -788,9 +790,9 @@ def start_server() -> None:
                                         dhcp_response.server_iface,
                                     )
                                     continue
-                                logger.debug(
-                                    "Unicasting DHCP reply over RAW socket: "
-                                    "Request Src Mac:%s Server Intf: %s",
+                                logger.info(
+                                    "DHCPv4: Client: %s Interface: %s "
+                                    "Status: Success (Unicast DHCP reply over raw sock)",
                                     src_mac,
                                     dhcp_response.server_iface,
                                 )
@@ -964,14 +966,14 @@ def start_server() -> None:
                                     dhcp6_response.data,
                                     (destination_ip6, udp.sport),
                                 )
-                            logger.debug(
-                                "DHCPv6: Client:%s Interface: %s Status: Success",
+                            logger.info(
+                                "DHCPv6: Client: %s Interface: %s Status: Success",
                                 Mac(rawmac),
                                 ifname,
                             )
                     except OSError as err:
                         logger.error(
-                            "DHCPv6: Client:%s Interface: %s Status: Failed (%s sending to %s)",
+                            "DHCPv6: Client: %s Interface: %s Status: Failed (%s sending to %s)",
                             Mac(rawmac),
                             ifname,
                             err,
