@@ -157,6 +157,49 @@ def construct_dhcp6_packet(
     return None
 
 
+def get_lease_time(
+    host_data: Dict[int, Any],
+    client_id: Union[Mac, str],
+) -> Tuple[int, int, int, int]:
+    t1 = V6Config.default_t1
+    t2 = V6Config.default_t2
+
+    if DHCP6_NON_DEFAULT_T1 in host_data:
+        t1 = host_data[DHCP6_NON_DEFAULT_T1].value
+    if DHCP6_NON_DEFAULT_T2 in host_data:
+        t2 = host_data[DHCP6_NON_DEFAULT_T2].value
+
+    pref_lifetime = V6Config.default_pref_lifetime
+    valid_lifetime = V6Config.default_valid_lifetime
+    if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
+        pref_lifetime = host_data[DHCP6_NON_DEFAULT_PREF_LIFETIME].value
+    if DHCP6_NON_DEFAULT_VALID_LIFETIME in host_data:
+        valid_lifetime = host_data[DHCP6_NON_DEFAULT_VALID_LIFETIME].value
+
+    if pref_lifetime > valid_lifetime:
+        logger.warning(
+            "DHCPv6: Client: %s Invalid pltime %s vltime %s",
+            client_id,
+            pref_lifetime,
+            valid_lifetime,
+        )
+        pref_lifetime = valid_lifetime
+
+    if t1 > t2 or t1 > pref_lifetime or t2 > pref_lifetime:
+        logger.warning(
+            "DHCPv6: Client: %s Invalid t1 %s t2 %s pltime %s vltime %s",
+            client_id,
+            t1,
+            t2,
+            pref_lifetime,
+            valid_lifetime,
+        )
+        t1 = round(0.5 * pref_lifetime)
+        t2 = round(0.8 * pref_lifetime)
+        logger.info("DHCPv6: Client: %s Reset t1=%s t2=%s", client_id, t1, t2)
+    return (t1, t2, pref_lifetime, valid_lifetime)
+
+
 # pylint: disable=too-many-locals, too-many-branches, too-many-statements
 def construct_ia_na_response_data(
     msg: Message.ClientServerDHCP6,
@@ -231,15 +274,9 @@ def construct_ia_na_response_data(
 
         encoded_value += requested_na[:4]  # The IA_NA value starts with IA_ID
 
-        (t1, t2) = struct.unpack(">ii", requested_na[4:12])
-        if (t1 == t2 and t1 == 0) or t1 > t2:
-            t1 = V6Config.default_t1
-            t2 = V6Config.default_t2
-
-        if DHCP6_NON_DEFAULT_T1 in host_data:
-            t1 = host_data[DHCP6_NON_DEFAULT_T1].value
-        if DHCP6_NON_DEFAULT_T2 in host_data:
-            t2 = host_data[DHCP6_NON_DEFAULT_T2].value
+        t1, t2, pref_lifetime, valid_lifetime = get_lease_time(
+            host_data, client_id
+        )
 
         encoded_value += t1.to_bytes(4, "big") + t2.to_bytes(
             4, "big"
@@ -310,24 +347,16 @@ def construct_ia_na_response_data(
                 # If atleast one message is not valid, send back reply with status NotOnLink
                 return None
             for addr in expired_addresses:
-                pref_lifetime = 0
-                valid_lifetime = 0
+                expired_lifetime = 0
                 iaddr_length = V6Config.default_iaaddr_len
                 encoded_value += (
                     struct.pack(">HH", DHCP6_OPT_IAADDR, iaddr_length)
                     + addr.packed
-                    + pref_lifetime.to_bytes(4, "big")
-                    + valid_lifetime.to_bytes(4, "big")
+                    + expired_lifetime.to_bytes(4, "big")
+                    + expired_lifetime.to_bytes(4, "big")
                 )
 
         iaddr_length = V6Config.default_iaaddr_len
-        pref_lifetime = V6Config.default_pref_lifetime
-        valid_lifetime = V6Config.default_valid_lifetime
-        if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
-            pref_lifetime = host_data[DHCP6_NON_DEFAULT_PREF_LIFETIME].value
-        if DHCP6_NON_DEFAULT_VALID_LIFETIME in host_data:
-            valid_lifetime = host_data[DHCP6_NON_DEFAULT_VALID_LIFETIME].value
-
         for addr in configured_addr6_list:
             encoded_value += (
                 struct.pack(">HH", DHCP6_OPT_IAADDR, iaddr_length)
@@ -581,16 +610,9 @@ def construct_ia_pd_response_data(
 
         encoded_value += requested_pd[:4]  # The IA_PD value starts with IA_ID
 
-        (t1, t2) = struct.unpack(">ii", requested_pd[4:12])
-        if (t1 == t2 and t1 == 0) or t1 > t2:
-            t1 = V6Config.default_t1
-            t2 = V6Config.default_t2
-
-        if DHCP6_NON_DEFAULT_T1 in host_data:
-            t1 = host_data[DHCP6_NON_DEFAULT_T1].value
-        if DHCP6_NON_DEFAULT_T2 in host_data:
-            t2 = host_data[DHCP6_NON_DEFAULT_T2].value
-
+        t1, t2, pref_lifetime, valid_lifetime = get_lease_time(
+            host_data, client_id
+        )
         encoded_value += t1.to_bytes(4, "big") + t2.to_bytes(
             4, "big"
         )  # Append t1,t2 to the IA_PD value
@@ -668,25 +690,17 @@ def construct_ia_pd_response_data(
                 # If atleast one message is not valid, send back reply with status NotOnLink
                 return None
             for prefix in expired_prefixes:
-                pref_lifetime = 0
-                valid_lifetime = 0
+                expired_lifetime = 0
                 iapd_length = V6Config.default_iapd_len
                 encoded_value += (
                     struct.pack(">HH", DHCP6_OPT_IAPREFIX, iapd_length)
-                    + pref_lifetime.to_bytes(4, "big")
-                    + valid_lifetime.to_bytes(4, "big")
+                    + expired_lifetime.to_bytes(4, "big")
+                    + expired_lifetime.to_bytes(4, "big")
                     + struct.pack(">B", prefix.prefixlen)
                     + prefix.network_address.packed
                 )
 
-        pref_lifetime = V6Config.default_pref_lifetime
-        valid_lifetime = V6Config.default_valid_lifetime
         iapd_length = V6Config.default_iapd_len
-
-        if DHCP6_NON_DEFAULT_PREF_LIFETIME in host_data:
-            pref_lifetime = host_data[DHCP6_NON_DEFAULT_PREF_LIFETIME].value
-        if DHCP6_NON_DEFAULT_VALID_LIFETIME in host_data:
-            valid_lifetime = host_data[DHCP6_NON_DEFAULT_VALID_LIFETIME].value
 
         for prefix in configured_pd_list:
             encoded_value += (
