@@ -1,3 +1,25 @@
+statichcpd (3.06) stable; urgency=medium
+
+  [ Eugene Crosser ]
+  * Remove namespaced instance, it's not used
+
+  [ Reshma Sreekumar ]
+  * SDN-1723: Improve log messages
+  * SDN-1284: Integrate pylint
+  * Fix: Populate valid v6 attrs
+  * Do not deactivate intf upon send failure
+  * SDN-1800: Log client requests and responses
+
+  [ Eugene Crosser ]
+  * tests: check version interval, limit black version
+  * lintian-overrides: allow "service outside lib"
+
+  [ Reshma Sreekumar ]
+  * logging: Fix a few more logs
+  * SDN-1803: Fix setting incorrect t1/t2
+
+ -- Eugene Crosser <evgenii.cherkashin@ionos.com>  Wed, 21 Aug 2024 12:00:47 +0200
+
 statichcpd (3.05) stable; urgency=medium
 
   [ Reshma Sreekumar ]
