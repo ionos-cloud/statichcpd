@@ -237,9 +237,15 @@ class InterfaceCache:
         entry.raw_fd = None
         self._by_ifname[entry.ifname] = entry
 
-    def set_interface_ip(self, ifname: str, ip: Optional[str]) -> None:
+    def set_interface_ip(
+        self, ifname: str, idx: int, mac: Optional[Mac], ip: Optional[str]
+    ) -> None:
         entry = self._by_ifname.get(ifname)
-        if entry:
+        if entry is None and ip:
+            # If RTM_NEWADDR was recevied before RTM_NEWLINK,
+            # cache the IP address and keep the entry inactive
+            entry = self.add(ifname, idx, mac)
+        if entry:  # Just to satisfy pylint
             entry.ip = ip
 
 
@@ -333,10 +339,10 @@ class Controller(
 
             ifcache_entry = self.fetch_ifcache_by_ifname(ifname)
             if nlmsg["event"] == "RTM_DELADDR":
-                self.ifcache.set_interface_ip(ifname, None)
+                self.ifcache.set_interface_ip(ifname, if_index, ifmac, None)
             elif nlmsg["event"] == "RTM_NEWADDR":
                 self.ifcache.set_interface_ip(
-                    ifname, nlmsg.get_attr("IFA_ADDRESS")
+                    ifname, if_index, ifmac, nlmsg.get_attr("IFA_ADDRESS")
                 )
             elif nlmsg["event"] == "RTM_NEWLINK":
                 ifcache_entry = self.ifcache.add(ifname, if_index, ifmac)
@@ -600,10 +606,9 @@ def start_server() -> None:
                     interface_ip = None
 
                 # Add a new intf cache entry for every served interface
-                if_entry = ctrl.ifcache.add(
-                    ifname, idx, get_mac_address(ifname)
-                )
-                ctrl.ifcache.set_interface_ip(ifname, interface_ip)
+                ifmac = get_mac_address(ifname)
+                if_entry = ctrl.ifcache.add(ifname, idx, ifmac)
+                ctrl.ifcache.set_interface_ip(ifname, idx, ifmac, interface_ip)
                 if state != "UP":
                     continue
                 # If state is UP, start polling irrespective of IP address configuration
