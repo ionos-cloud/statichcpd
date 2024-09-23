@@ -370,7 +370,7 @@ def process_dhcp_discover(
             ifname=ifname,
             client=client_mac,
         )
-    addr = fetch_destination_address(dhcp_obj, ifname)
+    addr = fetch_destination_address(dhcp_offer, ifname)
     return DHCPResponse(
         data=data, daddr=addr, server_id=server_id, server_iface=server_iface
     )
@@ -561,7 +561,7 @@ def process_dhcp_request(  # pylint: disable=too-many-branches
         )
 
     data = bytes(dhcp_packet)
-    addr = fetch_destination_address(dhcp_obj, ifname)
+    addr = fetch_destination_address(dhcp_packet, ifname)
     return DHCPResponse(
         data=data, daddr=addr, server_id=server_id, server_iface=server_iface
     )
@@ -610,7 +610,7 @@ def process_dhcp_inform(
             client=client_mac,
         )
     data = bytes(dhcp_packet)
-    addr = fetch_destination_address(dhcp_obj, ifname)
+    addr = fetch_destination_address(dhcp_packet, ifname)
     return DHCPResponse(
         data=data, daddr=addr, server_id=server_id, server_iface=server_iface
     )
