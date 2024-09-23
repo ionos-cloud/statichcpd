@@ -609,7 +609,7 @@ def start_server() -> None:
                 ifmac = get_mac_address(ifname)
                 if_entry = ctrl.ifcache.add(ifname, idx, ifmac)
                 ctrl.ifcache.set_interface_ip(ifname, idx, ifmac, interface_ip)
-                if state != "UP":
+                if state in ("LOWERLAYERDOWN", "DOWN"):
                     continue
                 # If state is UP, start polling irrespective of IP address configuration
                 if ctrl.activate_and_start_polling(if_entry) < 0:
