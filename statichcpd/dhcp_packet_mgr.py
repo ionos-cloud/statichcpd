@@ -8,7 +8,15 @@ import dpkt
 from dpkt import dhcp
 from dpkt.compat import compat_ord
 
-from .datatypes import Mac, Int16, Int32, Staticrt, DHCPError, DHCPResponse
+from .datatypes import (
+    Mac,
+    Int16,
+    Int32,
+    Staticrt,
+    DHCPError,
+    DHCPResponse,
+    Domain,
+)
 from .database_manager import (
     fetch_host_conf_data,
     DHCPv4DB,
@@ -196,6 +204,8 @@ def construct_dhcp_opt_list(  # pylint: disable=too-many-branches
             if all(isinstance(ele, IPv4Address) for ele in data):
                 encoded_data = b"".join([elem.packed for elem in data])
             elif all(isinstance(ele, Staticrt) for ele in data):
+                encoded_data = b"".join([bytes(elem) for elem in data])
+            elif all(isinstance(ele, Domain) for ele in data):
                 encoded_data = b"".join([bytes(elem) for elem in data])
             else:
                 logger.error(
