@@ -8,7 +8,7 @@ import csv
 from ipaddress import IPv4Address, IPv6Address, IPv6Network
 from dpkt import dhcp
 
-from .datatypes import Int16, Int32, Mac, Staticrt
+from .datatypes import Int16, Int32, Mac, Staticrt, Domain
 from .logmgr import logger
 
 # Import all dhcp6 opcodes, which is used in populating valid attributes table
@@ -242,6 +242,7 @@ class dtype(Enum):
     STATICRT = 6
     IA = 7
     PD = 8
+    DOMAIN = 9
 
 
 class DHCPv4DB:
@@ -525,6 +526,8 @@ def fetch_host_conf_data(
                 result[opcode].append(IPv4Address(value))
             elif datatype is dtype.STATICRT:
                 result[opcode].append(Staticrt(value))
+            elif datatype is dtype.DOMAIN:
+                result[opcode].append(Domain(value))
             elif datatype is dtype.IPV6:
                 result[opcode].append(IPv6Address(value))
             elif datatype is dtype.IA:

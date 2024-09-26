@@ -53,6 +53,29 @@ class Staticrt:
         return destination_descriptor + gateway.packed
 
 
+class Domain:
+    def __init__(self, val: str) -> None:
+        self.labels = val.split(".")
+
+    def __repr__(self) -> str:
+        return type(self).__name__ + "(" + str(self.labels) + ")"
+
+    def __bytes__(
+        self,
+    ) -> (
+        bytes
+    ):  # Returns a byte string in accordance with RFC 3397 DHCP Option 119
+        encoded_domain = b""
+        null_terminator = 0
+        for label in self.labels:
+            encoded_domain += len(label).to_bytes(1, "big") + label.encode(
+                "utf-8"
+            )
+        if len(encoded_domain) > 0:
+            encoded_domain += null_terminator.to_bytes(1, "big")
+        return encoded_domain
+
+
 class Mac:
     def __init__(self, mac: Union[str, bytes]) -> None:
         if isinstance(mac, bytes):

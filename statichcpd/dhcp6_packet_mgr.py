@@ -8,7 +8,7 @@ from typing import Any, List, Tuple, Union, Optional, Dict, cast, Iterable
 from ipaddress import IPv6Address, IPv6Network, AddressValueError
 from enum import Enum
 from dpkt.compat import compat_ord
-from .datatypes import Mac, Int16, Int32, DHCPError, DHCP6Response
+from .datatypes import Mac, Int16, Int32, DHCPError, DHCP6Response, Domain
 from .database_manager import (
     fetch_host_conf_data,
     DHCPv6DB,
@@ -778,6 +778,8 @@ def construct_dhcp6_opt_list(
                 encoded_data = (data.value).to_bytes(2, "big")
             elif isinstance(data, Int32):
                 encoded_data = (data.value).to_bytes(4, "big")
+            elif all(isinstance(ele, Domain) for ele in data):
+                encoded_data = b"".join([bytes(elem) for elem in data])
             elif isinstance(data, list) and len(data) > 0:
                 if all(isinstance(ele, IPv6Address) for ele in data):
                     if opcode == DHCP6_OPT_IA_NA:
