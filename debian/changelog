@@ -1,3 +1,12 @@
+statichcpd (3.07) stable; urgency=medium
+
+  [ Reshma Sreekumar ]
+  * SDN-1818: Server IP not cached correctly
+  * SDN-1820: Adhere to broadcast bit set by client
+  * Fix operstate check
+
+ -- Eugene Crosser <evgenii.cherkashin@ionos.com>  Wed, 06 Nov 2024 15:41:10 +0100
+
 statichcpd (3.06) stable; urgency=medium
 
   [ Eugene Crosser ]
