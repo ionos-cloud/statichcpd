@@ -414,15 +414,15 @@ def fetch_client_state(
     except AddressValueError:
         return state.INVALID
 
-    if not ciaddr.is_unspecified:
-        if not requested_ip and (not server_id or server_id.is_unspecified):
-            return state.RENEWING_REBINDING
-        return state.INVALID
-    try:
-        if IPv4Address(requested_ip):
-            return state.SELECTING_INIT_REBOOT
-    except ValueError:
-        return state.INVALID
+    if ciaddr.is_unspecified:
+        try:
+            if IPv4Address(requested_ip):
+                return state.SELECTING_INIT_REBOOT
+        except ValueError:
+            return state.INVALID
+
+    if not requested_ip or (requested_ip == ciaddr):
+        return state.RENEWING_REBINDING
 
     return state.INVALID
 
