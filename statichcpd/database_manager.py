@@ -49,6 +49,25 @@ class DatabaseManager:
 
 dhcp_db = DatabaseManager()
 
+"""
+In a scenario where the controller has not adapted to the new feature of
+'port grouping' or if we have non-empty database left from previously running
+version, the database will have NULL values in the groupID field. In such a
+scenario, the triggers are defined such that it attempts to replace existing
+entry with a valid groupID and not attempt to insert and fail with UNIQUE
+constraint failure.
+
+Also, additional triggers, 'client_insertion' and 'client_deletion', are defined
+to make the new version of statichcp compatible with old controller code which
+attempts to directly populate the 'clients' table before configuring the config tables.
+
+When groupID is part of the foreign key, but allowed to be NULL at the same time, it
+results in a tricky situation where, if the groupID value for an entry is NULL in all the
+tables, the foreign key constraints are not really imposed nor does `delete cascade` take
+effect. As a result, additional trigger `client_del_config_cleanup` is needed to
+explicitly delete the configs upon delete on `clients` table, if the groupID is NULL.
+"""
+
 schema = [
     """create table if not exists valid_attributes(
            opcode int not null,
@@ -99,6 +118,108 @@ schema = [
            client_groups(ifname, groupID) on delete cascade,
            foreign key (attr_code) references
            valid_v6attributes(opcode) on delete restrict);""",
+    """create trigger if not exists client_insertion before insert on clients
+           begin
+           insert into client_groups (ifname, groupID)
+           select new.ifname, new.groupID where not exists(
+           select 1 from client_groups where ifname=new.ifname and
+           (groupID=new.groupID or groupID is new.groupID));
+           end;""",
+    """create trigger if not exists client_deletion after delete on clients
+           when (select count(*) from clients where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID)) == 0
+           begin
+           delete from client_groups where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID);
+           end;""",
+    """create trigger if not exists client_del_config_cleanup before delete on clients
+           when exists(select 1 from clients where ifname=old.ifname and
+           groupID is old.groupID and old.groupID is NULL)
+           begin
+           delete from client_configuration where
+           ifname=old.ifname and mac=old.mac and groupID is NULL;
+           delete from client_v6configuration where
+           ifname=old.ifname and duid=old.mac and groupID is NULL;
+           end;""",
+    """create trigger if not exists client_v4_cfg_insertion before
+           insert on client_configuration
+           when (select count(*) from client_groups where
+           ifname=new.ifname and groupID is NULL) == 0
+           begin
+           insert into client_groups (ifname, groupID) select
+           new.ifname, new.groupID where not exists(
+           select 1 from client_groups where
+           ifname=new.ifname and groupID=new.groupID);
+           insert into clients (ifname, groupID, mac) select
+           new.ifname, new.groupID, new.mac where not exists(
+           select 1 from clients where
+           ifname=new.ifname and groupID=new.groupID and mac=new.mac);
+           end;""",
+    """create trigger if not exists client_v4_cfg_replace before
+           insert on client_configuration
+           when (select count(*) from client_groups where
+           ifname=new.ifname and groupID is NULL) > 0 and
+           new.groupID is not NULL
+           begin
+           replace into client_groups (ifname, groupID)
+           values (new.ifname, new.groupID);
+           replace into clients (ifname, groupID, mac)
+           values (new.ifname, new.groupID, new.mac);
+           end;""",
+    """create trigger if not exists client_v6_cfg_insertion before
+           insert on client_v6configuration
+           when (select count(*) from client_groups where
+           ifname=new.ifname and groupID is NULL) == 0
+           begin
+           insert into client_groups (ifname, groupID)
+           select new.ifname, new.groupID where not exists(
+           select 1 from client_groups where
+           ifname=new.ifname and groupID=new.groupID);
+           insert into clients (ifname, groupID, mac)
+           select new.ifname, new.groupID, new.duid where not exists(
+           select 1 from clients where
+           ifname=new.ifname and groupID=new.groupID and mac=new.duid);
+           end;""",
+    """create trigger if not exists client_v6_cfg_replace before
+           insert on client_v6configuration
+           when (select count(*) from client_groups where
+           ifname=new.ifname and groupID is NULL) > 0 and new.groupID is not NULL
+           begin
+           replace into client_groups (ifname, groupID)
+           values (new.ifname, new.groupID);
+           replace into clients (ifname, groupID, mac)
+           values (new.ifname, new.groupID, new.duid);
+           end;""",
+    """create trigger if not exists client_v4_cfg_deletion after
+           delete on client_configuration
+           when (select count(*) from client_configuration where
+           ifname=old.ifname and mac=old.mac) == 0
+           and (select count(*) from client_v6configuration where
+           ifname=old.ifname and duid=old.mac) == 0
+           begin
+           delete from clients where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID) and mac=old.mac;
+           delete from client_groups where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID)
+           and not exists(select 1 from clients where
+           ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID)
+           and mac<>old.mac);
+           end;""",
+    """create trigger if not exists client_v6_cfg_deletion after
+           delete on client_v6configuration
+           when (select count(*) from client_v6configuration where
+           ifname=old.ifname and duid=old.duid) == 0
+           and (select count(*) from client_configuration where
+           ifname=old.ifname and mac=old.duid) == 0
+           begin
+           delete from clients where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID) and mac=old.duid;
+           delete from client_groups where ifname=old.ifname and
+           (groupID=old.groupID or groupID is old.groupID)
+           and not exists(select 1 from clients where
+           ifname=old.ifname and (groupID=old.groupID or groupID is old.groupID)
+           and mac<>old.duid);
+           end;""",
 ]
 
 # Using IP(v4/v6) opcode value outside permitted
@@ -125,6 +246,14 @@ class dtype(Enum):
 
 
 class DHCPv4DB:
+    """
+    In a scenario where the controller has not adapted to the new feature of
+    'port grouping' or if we have non-empty database left from previously running
+    version, the database will have NULL values in the groupID field. In such a
+    case, fallback to the lookup that matches <ifname and mac>, without considering
+    interface grouping.
+    """
+
     select_command = """ select valid_attributes.opcode, valid_attributes.max_count,
                          valid_attributes.datatype, client_configuration.attr_val,
                          client_configuration.ifname
@@ -132,11 +261,13 @@ class DHCPv4DB:
                          join valid_attributes on
                          client_configuration.attr_code = valid_attributes.opcode
                          where mac=:client_id and
-                         ifname in (select ifname from client_groups
-                              where groupID=(select groupID from client_groups
-                              where ifname=:ifname)
-                         );
-                     """
+                         case when (select count(*) from client_groups where ifname=:ifname
+                                    and groupID is NULL) == 0
+                              then ifname in (select ifname from client_groups
+                                   where groupID=(select groupID from client_groups
+                                   where ifname=:ifname))
+                              else ifname=:ifname
+                         end;"""
 
 
 class DHCPv6DB:
@@ -147,11 +278,43 @@ class DHCPv6DB:
                          join valid_v6attributes on
                          client_v6configuration.attr_code = valid_v6attributes.opcode
                          where duid=:client_id and
-                         ifname in (select ifname from client_groups
-                             where groupID = (select groupID from client_groups
-                             where ifname=:ifname)
-                         );
-                     """
+                         case when (select count(*) from client_groups where ifname=:ifname
+                                    and groupID is NULL) == 0
+                              then ifname in (select ifname from client_groups
+                                   where groupID = (select groupID from client_groups
+                                   where ifname=:ifname))
+                              else ifname=:ifname
+                         end;"""
+
+
+alter_table_cmd = [
+    """alter table clients add column groupID""",
+    """alter table client_configuration add column groupID""",
+    """alter table client_v6configuration add column groupID""",
+]
+
+migrate_cfgs_cmd = [
+    """insert into clients (ifname, groupID, mac)
+                       select distinct ifname, groupID, mac from
+                       client_configuration where not exists(
+                       select 1 from clients where ifname=ifname and mac=mac
+                       and (groupID=groupID or groupID is groupID));""",
+    """insert into client_groups (ifname, groupID)
+                       select distinct ifname, groupID from
+                       client_configuration where not exists(
+                       select 1 from client_groups where ifname=ifname and
+                       (groupID=groupID or groupID is groupID));""",
+    """insert into clients (ifname, groupID, mac)
+                       select distinct ifname, groupID, duid from
+                       client_v6configuration where not exists(
+                       select 1 from clients where ifname=ifname and mac=duid
+                       and (groupID=groupID or groupID is groupID));""",
+    """insert into client_groups (ifname, groupID)
+                       select distinct ifname, groupID from
+                       client_v6configuration where not exists(
+                       select 1 from client_groups where ifname=ifname and
+                       (groupID=groupID or groupID is groupID));""",
+]
 
 
 def populate_table_from(table_name: str, csv_filename: str) -> None:
@@ -232,6 +395,13 @@ def init(config: Dict[str, Any]) -> None:
     for command in schema:
         cursor.execute(command)
 
+    # If migrating from older version of database which doesn't have groupID,
+    # alter table to add that
+    try:
+        for command in alter_table_cmd:
+            cursor.execute(command)
+    except sqlite3.Error:
+        pass
     dhcp_db.conn.commit()
 
     # "valid_attributes" and "valid_v6attributes" tables are shared among all
@@ -269,6 +439,9 @@ def init(config: Dict[str, Any]) -> None:
         )
     dhcp_db.conn.commit()
 
+    # Migrate configs from a non-empty database
+    for command in migrate_cfgs_cmd:
+        cursor.execute(command)
     cursor.close()
     dhcp_db.conn.commit()
     dhcp_db.conn.close()
