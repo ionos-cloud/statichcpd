@@ -79,7 +79,9 @@ def fetch_dhcp_opt(dhcp_obj: dhcp.DHCP, opt: int) -> Any:
 def fetch_dhcp_type(dhcp_obj: dhcp.DHCP) -> Optional[int]:
     data = fetch_dhcp_opt(dhcp_obj, dhcp.DHCP_OPT_MSGTYPE)
     try:
-        mtype: int = struct.unpack("b", data)[0] if data else None
+        mtype: Optional[int] = (
+            int(struct.unpack("b", data)[0]) if data else None
+        )
     except (TypeError, struct.error):
         # Catch any posible unpack errors
         # eg: If the received data is not of length 1 byte, unpack will fail
