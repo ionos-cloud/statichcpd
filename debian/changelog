@@ -1,3 +1,14 @@
+statichcpd (3.08) stable; urgency=medium
+
+  * SDN-1821: Introduce support for domain search list
+  * SDN-1793: Remove compatability-hacks with old controller
+  * SDN-1948: Ease client state check
+  * Revert "SDN-1793: Remove compatability-hacks with old controller"
+  * build: disable buster
+  * mypy: Satisfy newer mypy
+
+ -- Reshma Sreekumar <reshma.sreekumar@ionos.com>  Mon, 01 Sep 2025 15:18:21 +0000
+
 statichcpd (3.07) stable; urgency=medium
 
   [ Reshma Sreekumar ]
