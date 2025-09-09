@@ -674,7 +674,7 @@ def start_server() -> None:
                     # are possibly queued in this socket queue. Ignore such
                     # packets.
                     if ifname != ifcache_entry.ifname:
-                        logger.error(
+                        logger.debug(
                             "Ignoring irrelevant packet: Socket on %s received data"
                             " with interface name as %s",
                             ifcache_entry.ifname,
