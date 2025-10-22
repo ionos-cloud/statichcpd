@@ -1,6 +1,7 @@
 [Unit]
 Description=Static Host Configuration Protocol Daemon
 After=network.target
+Before=pbsdnmgr.service
 
 [Service]
 Type=simple
