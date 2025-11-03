@@ -1,3 +1,11 @@
+statichcpd (3.09) stable; urgency=medium
+
+  [ Reshma Sreekumar ]
+  * Reduce severity of logging ignored pkts
+  * SDN-1986: Handle packet processing errors
+
+ -- Eugene Crosser <evgenii.cherkashin@ionos.com>  Mon, 03 Nov 2025 17:30:00 +0100
+
 statichcpd (3.08) stable; urgency=medium
 
   * SDN-1821: Introduce support for domain search list
