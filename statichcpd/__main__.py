@@ -45,6 +45,12 @@ if __name__ == "__main__":
         help="Specify the directory for additionaly config file lookup",
     )
 
+    argparser.add_argument(
+        "--init-db-and-exit",
+        help="Initialise the database schema and exit",
+        action="store_true",
+    )
+
     namespace = argparser.parse_args()
     set_log_config(namespace)
 
@@ -73,6 +79,8 @@ if __name__ == "__main__":
             statichcpd_config.update(config["statichcpd"])
 
     database_manager.init(statichcpd_config)
+    if namespace.init_db_and_exit:
+        raise SystemExit(0)
     dhcpserver.init(statichcpd_config)
     dhcp_packet_mgr.init(statichcpd_config)
     dhcp6_packet_mgr.init(statichcpd_config)
