@@ -203,7 +203,7 @@ def get_lease_time(
 # pylint: disable=too-many-locals, too-many-branches, too-many-statements
 def construct_ia_na_response_data(
     msg: Message.ClientServerDHCP6,
-    conf_data: List[Union[IPv6Address, Tuple[str, IPv6Address]]],
+    conf_data: Optional[List[Union[IPv6Address, Tuple[str, IPv6Address]]]],
     host_data: Dict[int, Any],
     ifname: str,
     client_id: Union[Mac, str],
@@ -378,7 +378,7 @@ def construct_ia_na_response_data(
 # pylint: disable=too-many-branches
 def construct_ia_ta_response_data(
     msg: Message.ClientServerDHCP6,
-    conf_data: List[Union[IPv6Address, Tuple[str, IPv6Address]]],
+    conf_data: Optional[List[Union[IPv6Address, Tuple[str, IPv6Address]]]],
     host_data: Dict[int, Any],
     ifname: str,
     client_id: Union[Mac, str],
