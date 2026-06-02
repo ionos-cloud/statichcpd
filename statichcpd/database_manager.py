@@ -472,14 +472,26 @@ def fetch_host_conf_data(
     if dhcp_db.conn is None:
         return result, None
     cursor = dhcp_db.conn.cursor()
-    client_if = None
-    for opcode, max_count, datatype, value, iface in cursor.execute(
+    cursor.execute(
         db_obj.select_command, {"client_id": str(client_id), "ifname": ifname}
-    ):
+    )
+    rows = cursor.fetchall()
+
+    # When the same client ID is configured on multiple interfaces of the
+    # group, prefer the request interface if present among the matches;
+    # otherwise fall through to the "multiple interfaces" error below.
+    iface_col_idx = [d[0] for d in cursor.description].index("ifname")
+    rows = [row for row in rows if row[iface_col_idx] == ifname] or rows
+
+    client_if = None
+    for opcode, max_count, datatype, value, iface in rows:
         if client_if and client_if != iface:
             logger.error(
-                "Multiple server interfaces %s match the client ID %s",
+                "Multiple server interfaces %s "
+                "(!= request interface %s) "
+                "match the client ID %s",
                 [client_if, iface],
+                ifname,
                 client_id,
             )
             return result, None
