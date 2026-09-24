@@ -1,3 +1,15 @@
+statichcpd (3.10) stable; urgency=medium
+
+  * SDN-2018: Additional flag to initialise DB schema and exit
+  * Remove unecessary lintian override
+  * debian: Initialise DB during ExecStartPre
+  * Trigger CI/CD pipeline
+  * mypy: fix
+  * Prefer request interface when multiple ifaces match the same client ID
+  * SDN-2084: Tighten rawsock filter with src port
+
+ -- Reshma Sreekumar <reshma.sreekumar@ionos.com>  Thu, 24 Sep 2026 15:14:39 +0200
+
 statichcpd (3.09) stable; urgency=medium
 
   [ Reshma Sreekumar ]
