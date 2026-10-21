@@ -6,3 +6,41 @@ include:
 
 variables:
   RELEASES: "debian-stretch-buster ubuntu-focal-jammy-kinetic"
+
+# The statichcpd image, built from this pipeline's trixie package; see
+# docker/README.md. It takes debian-trixie-build's rules, so it exists
+# exactly when that job does. Its needs, not its stage, decide when it
+# starts: after lintian, and in a branch pipeline that uploads, after the
+# trixie upload, so that only uploaded packages become images. Its stage is
+# the recipe's "upload", the last one before "cleanup artifacts", which
+# deletes the .debs. This file adds no stages list: one here would replace
+# the recipe's, and stop following it.
+container-image:
+  stage: upload
+  image: docker:latest
+  needs:
+    - job: version-main
+      optional: true
+    - job: version-develop
+      optional: true
+    - job: version-feature
+      optional: true
+    - debian-trixie-variables
+    - job: debian-trixie-build
+      artifacts: true
+    - job: debian-trixie-lintian
+      artifacts: false
+    # Absent in merge request pipelines and when UPLOAD_TO_REPOSITORY is
+    # not "true".
+    - job: debian-trixie-upload
+      optional: true
+      artifacts: false
+  rules:
+    - !reference [debian-trixie-build, rules]
+  variables:
+    IMAGE_NAME: statichcpd
+  script:
+    - sh docker/ci-image.sh
+  after_script:
+    # The daemon is the runner host's: remove this job's tag from it.
+    - docker image rm "ci/${IMAGE_NAME}:${CI_PIPELINE_ID}-${CI_JOB_ID}" || true
